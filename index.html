@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Routeplane AI Gateway — API Reference</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="https://routeplane.ai/favicon.svg" type="image/svg+xml" />
+    <style>
+      body { margin: 0; padding: 0; }
+
+      /* On-brand top bar above Redoc. Redoc owns the full viewport and renders
+         its own left sidebar (the endpoint list), so a fixed top bar + a
+         matching scroll-y-offset on <redoc> is how we add site navigation. */
+      .rp-topbar {
+        position: fixed; top: 0; left: 0; right: 0; z-index: 10000;
+        height: 48px; box-sizing: border-box;
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 0 18px;
+        background: #0B1120;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      }
+      .rp-brand { display: flex; align-items: center; gap: 9px; color: #E6EAF2; font-size: 15px; font-weight: 500; letter-spacing: -0.2px; text-decoration: none; }
+      .rp-brand .dot { color: #0EA5E9; }
+      .rp-brand .sep { color: #5B6B85; margin: 0 2px; font-weight: 400; }
+      .rp-brand .section { color: #94A3B8; font-weight: 400; }
+      .rp-links { display: flex; align-items: center; gap: 8px; }
+      .rp-links a {
+        color: #E6EAF2; font-size: 13.5px; text-decoration: none;
+        padding: 7px 14px; border-radius: 8px;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        transition: border-color 0.15s, background 0.15s, color 0.15s;
+      }
+      .rp-links a:hover { border-color: #0EA5E9; color: #fff; }
+      .rp-links a.primary {
+        border: none;
+        background: linear-gradient(120deg, #6366F1 0%, #8B5CF6 52%, #0EA5E9 100%);
+        color: #fff;
+      }
+      .rp-links a.primary:hover { filter: brightness(1.08); }
+      /* Edition switcher: Full reference <-> Community Edition view. */
+      .rp-switch {
+        display: flex; align-items: center; gap: 0; margin-right: 10px;
+        border: 1px solid rgba(148, 163, 184, 0.28); border-radius: 8px;
+        overflow: hidden;
+      }
+      .rp-switch a {
+        border: none; border-radius: 0; padding: 7px 12px;
+        color: #AAB6CD;
+      }
+      .rp-switch a:hover { color: #fff; border-color: transparent; }
+      .rp-switch a.active {
+        background: rgba(99, 102, 241, 0.22); color: #E6EAF2; cursor: default;
+      }
+      /* Redoc renders into #redoc; the fixed 48px bar is reserved via the
+         container's padding-top plus Redoc's own scrollYOffset (set in init) —
+         one offset each for the in-flow content and the fixed sidebar, so they
+         line up under the bar instead of double-offsetting. */
+      #redoc { padding-top: 48px; }
+      /* The info/description ## subsections render as Redoc "section/..." blocks
+         where the <h2> heading and the .redoc-markdown text sit in separate
+         stacked wrapper rows — Redoc puts a large gap between those rows. Collapse
+         the heading→text distance (stable hooks: [data-section-id], .redoc-markdown). */
+      .api-info h1, .api-info h2 { margin-top: 1em; margin-bottom: 0.3em; }
+      .api-info p { margin: 0.4em 0; }
+      [data-section-id^="section/"] > div { padding-top: 0 !important; padding-bottom: 0 !important; }
+      [data-section-id^="section/"] h1,
+      [data-section-id^="section/"] h2 { margin: 0.25em 0 0.3em !important; }
+      [data-section-id^="section/"] .redoc-markdown { margin-top: 0 !important; }
+      [data-section-id^="section/"] .redoc-markdown > :first-child { margin-top: 0 !important; }
+      /* Dark content surface — match the topbar/sidebar/sample panels instead of
+         Redoc's default white middle panel. */
+      body { background: #131A2B; }
+      redoc, .redoc-wrap, .api-content { background: #131A2B; }
+      /* parameter / schema tables inside the content column */
+      .api-content table th { background: #161E30 !important; }
+      .api-content table td, .api-content table th { border-color: #25304D !important; }
+      /* Redoc's small uppercase section labels (Authorizations, Request Body schema,
+         Response Headers, parameter-group captions) are muted to near-invisibility on
+         the dark surface — lift them to a readable, still-subordinate secondary.
+         STABLE selectors only (h5/caption + the media-type span inside the h5);
+         never target generated styled-components class hashes (.sc-*), which
+         silently break on any Redoc version bump. */
+      .api-content h5,
+      .api-content h5 span,
+      .api-content caption { color: #9FB0C9 !important; opacity: 1 !important; }
+      /* media-type label next to "Request Body schema:" / "Response Schema:" */
+      .api-content h5 > span { color: #C7D2FE !important; }
+      /* The request-samples "Payload" tab (react-tabs) defaults to a white pill with
+         invisible white text on the dark sample panel — restyle as a subtle dark pill.
+         (react-tabs class names are Redoc's public tab markup, not styled-components
+         hashes — stable across Redoc 2.x.) */
+      .react-tabs__tab-list { border-bottom: none !important; }
+      .react-tabs__tab {
+        background: rgba(99, 102, 241, 0.10) !important;
+        color: #C7D2FE !important;
+        border: 1px solid #2E3A5C !important;
+        border-radius: 6px !important;
+      }
+      .react-tabs__tab--selected {
+        background: rgba(99, 102, 241, 0.20) !important;
+        color: #E6EAF2 !important;
+        border-color: #6366F1 !important;
+      }
+      /* boolean syntax token (true/false) in samples was a too-dark red on the near-black code bg */
+      .token.boolean { color: #FCA5A5 !important; }
+      @media (max-width: 700px) {
+        .rp-brand .section { display: none; }
+        .rp-links a:not(.primary):not(.rp-switch a) { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="rp-topbar">
+      <a class="rp-brand" href="https://routeplane.ai/" aria-label="Routeplane home">
+        <svg width="22" height="20" viewBox="0 0 80 80" aria-hidden="true">
+          <defs>
+            <linearGradient id="rpg" x1="0%" y1="100%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#0EA5E9"/>
+              <stop offset="50%" stop-color="#6366F1"/>
+              <stop offset="100%" stop-color="#A855F7"/>
+            </linearGradient>
+          </defs>
+          <line x1="40" y1="40" x2="6" y2="12" stroke="#2D8FCF" stroke-width="4" stroke-linecap="round"/>
+          <line x1="40" y1="40" x2="6" y2="68" stroke="#2D8FCF" stroke-width="4" stroke-linecap="round"/>
+          <line x1="40" y1="40" x2="74" y2="12" stroke="#9456C9" stroke-width="4" stroke-linecap="round"/>
+          <line x1="40" y1="40" x2="74" y2="68" stroke="#9456C9" stroke-width="4" stroke-linecap="round"/>
+          <circle cx="6" cy="12" r="6" fill="#0EA5E9"/>
+          <circle cx="6" cy="68" r="6" fill="#0EA5E9"/>
+          <circle cx="74" cy="12" r="6" fill="#A855F7"/>
+          <circle cx="74" cy="68" r="6" fill="#A855F7"/>
+          <circle cx="40" cy="40" r="15" fill="url(#rpg)"/>
+        </svg>
+        <span>routeplane<span class="dot">.ai</span></span>
+        <span class="sep">/</span>
+        <span class="section">API reference</span>
+      </a>
+      <nav class="rp-links" aria-label="Routeplane">
+        <span class="rp-switch" role="group" aria-label="Edition">
+          <a href="./index.html" class="active" aria-current="page">Full reference</a>
+          <a href="./community.html">Community Edition</a>
+        </span>
+        <a href="https://routeplane.ai/docs/" class="primary">Docs</a>
+        <a href="https://routeplane.ai/">Home</a>
+      </nav>
+    </header>
+
+    <div id="redoc"></div>
+    <!-- Pinned (not `latest`) + Subresource Integrity so a CDN release or
+         compromise can't silently change or tamper with the render. -->
+    <script src="https://cdn.redoc.ly/redoc/v2.1.5/bundles/redoc.standalone.js"
+            integrity="sha384-0GrsyTQc9Oqd8h+b2dbc4XdR2T/DYpy0tLNNstyx+LBMUyiBbcWPbEs9aRmUcaxD"
+            crossorigin="anonymous"></script>
+    <script>
+      Redoc.init(
+        'openapi.yaml',
+        {
+          scrollYOffset: 48,
+          expandResponses: '200',
+          jsonSampleExpandLevel: 3,
+          requiredPropsFirst: true,
+          pathInMiddlePanel: true,
+          hideDownloadButton: false,
+          theme: {
+            colors: {
+              primary: { main: '#818CF8' },
+              http: { get: '#0EA5E9', post: '#34D399', put: '#FCD34D', delete: '#F87171' },
+              text: { primary: '#E6EAF2', secondary: '#AAB6CD' },
+              border: { dark: '#2A3654', light: '#222C46' },
+              gray: { 50: '#1A2336', 100: '#151D2F' },
+              responses: {
+                success:  { color: '#6EE7B7', backgroundColor: 'rgba(52, 211, 153, 0.07)', tabTextColor: '#34D399' },
+                error:    { color: '#FCA5A5', backgroundColor: 'rgba(248, 113, 113, 0.07)', tabTextColor: '#F87171' },
+                redirect: { color: '#FCD34D', backgroundColor: 'rgba(252, 211, 77, 0.07)',  tabTextColor: '#FCD34D' },
+                info:     { color: '#7DD3FC', backgroundColor: 'rgba(56, 189, 248, 0.07)',  tabTextColor: '#38BDF8' },
+              },
+            },
+            schema: {
+              nestedBackground: '#161E30',
+              typeNameColor: '#9DB2D6',
+              typeTitleColor: '#C7D2FE',
+              linesColor: '#33425F',
+              requireLabelColor: '#FCA5A5',
+            },
+            spacing: {
+              // Default sectionVertical is 40px (top AND bottom of every section ⇒
+              // ~80px between sections). Tighten the vertical rhythm.
+              sectionVertical: 18,
+            },
+            typography: {
+              fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
+              fontSize: '15px',
+              headings: {
+                fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
+                fontWeight: '600',
+              },
+              code: { color: '#C7D2FE', backgroundColor: 'rgba(99, 102, 241, 0.16)' },
+              links: { color: '#38BDF8' },
+            },
+            sidebar: {
+              backgroundColor: '#0B1120',
+              textColor: '#E6EAF2',
+              activeTextColor: '#0EA5E9',
+            },
+            rightPanel: {
+              backgroundColor: '#0F172A',
+              textColor: '#E6EAF2',
+            },
+          },
+        },
+        document.getElementById('redoc')
+      );
+    </script>
+  </body>
+</html>
