@@ -135,86 +135,10 @@
             integrity="sha384-0GrsyTQc9Oqd8h+b2dbc4XdR2T/DYpy0tLNNstyx+LBMUyiBbcWPbEs9aRmUcaxD"
             crossorigin="anonymous"></script>
     <script>
-      // --- Community Edition view -------------------------------------------
-      // One source spec, filtered client-side: fetch openapi.yaml, remove every
-      // path whose operation is marked `x-routeplane-edition: enterprise`, drop
-      // the now-empty Prompts / Agentic-security tags, and hand the filtered
-      // YAML to Redoc via a Blob URL (Redoc parses YAML itself — no extra
-      // dependency, no build step, no second hand-maintained spec).
-      //
-      // The filter works on YAML TEXT and relies on two invariants that
-      // openapi.yaml declares in its header comment:
-      //   1. every path defines exactly ONE operation, and
-      //   2. every operation carries the `x-routeplane-edition:` marker line.
-      // Path chunks are the 2-space-indented keys directly under `paths:`, so
-      // dropping a whole chunk removes the operation, its schema refs stay
-      // unrendered (Redoc only renders referenced components), and enterprise
-      // surfaces are absent — not greyed out — matching the gateway's own
-      // 404-when-not-entitled posture.
-      var CE_TAG_DROPS = ['Prompts', 'Agentic security'];
-
-      function filterCommunitySpec(text) {
-        var lines = text.split('\n');
-        var out = [];
-        var i = 0;
-        function isTopLevelKey(line) {
-          return /^[A-Za-z$]/.test(line);
-        }
-        while (i < lines.length) {
-          var line = lines[i];
-          if (/^tags:\s*$/.test(line)) {
-            // tags block: keep entries except the enterprise-only tags.
-            out.push(line);
-            i += 1;
-            while (i < lines.length && !isTopLevelKey(lines[i])) {
-              if (/^  - name: /.test(lines[i])) {
-                var entry = [lines[i]];
-                var j = i + 1;
-                while (j < lines.length && /^ {4}/.test(lines[j])) {
-                  entry.push(lines[j]);
-                  j += 1;
-                }
-                var name = lines[i].replace(/^  - name: /, '').trim();
-                if (CE_TAG_DROPS.indexOf(name) === -1) {
-                  out.push.apply(out, entry);
-                }
-                i = j;
-              } else {
-                out.push(lines[i]);
-                i += 1;
-              }
-            }
-          } else if (/^paths:\s*$/.test(line)) {
-            // paths block: keep path chunks unless marked enterprise.
-            out.push(line);
-            i += 1;
-            while (i < lines.length && !isTopLevelKey(lines[i])) {
-              if (/^ {2}\S/.test(lines[i])) {
-                var chunk = [lines[i]];
-                var k = i + 1;
-                while (k < lines.length && !isTopLevelKey(lines[k]) && !/^ {2}\S/.test(lines[k])) {
-                  chunk.push(lines[k]);
-                  k += 1;
-                }
-                var enterprise = chunk.some(function (l) {
-                  return l.indexOf('x-routeplane-edition: enterprise') !== -1;
-                });
-                if (!enterprise) {
-                  out.push.apply(out, chunk);
-                }
-                i = k;
-              } else {
-                out.push(lines[i]);
-                i += 1;
-              }
-            }
-          } else {
-            out.push(line);
-            i += 1;
-          }
-        }
-        return out.join('\n');
-      }
+      // Community Edition view: Redoc renders a PRE-GENERATED CE spec
+      // (openapi.ce.yaml = openapi.yaml with x-routeplane-edition: enterprise
+      // operations + the Prompts / Agentic-security tags removed). Static file,
+      // same load path as index.html — no client-side filtering, no blob URL.
 
       var redocOptions = {
         scrollYOffset: 48,
@@ -267,25 +191,7 @@
         },
       };
 
-      fetch('openapi.yaml')
-        .then(function (res) {
-          if (!res.ok) { throw new Error('HTTP ' + res.status); }
-          return res.text();
-        })
-        .then(function (text) {
-          var filtered = filterCommunitySpec(text);
-          var blobUrl = URL.createObjectURL(
-            new Blob([filtered], { type: 'application/yaml' })
-          );
-          Redoc.init(blobUrl, redocOptions, document.getElementById('redoc'));
-        })
-        .catch(function (err) {
-          var el = document.getElementById('redoc');
-          el.innerHTML =
-            '<div class="rp-error">Could not load the Community Edition view (' +
-            String(err).replace(/[<>&]/g, '') +
-            '). Try the <a href="./index.html">full reference</a>.</div>';
-        });
+      Redoc.init('openapi.ce.yaml', redocOptions, document.getElementById('redoc'));
     </script>
   </body>
 </html>
