@@ -1,0 +1,1904 @@
+# GENERATED — do not hand-edit. The Community Edition view of openapi.yaml:
+# every operation marked x-routeplane-edition: enterprise (and the Prompts /
+# Agentic-security tags) removed. Regenerate from openapi.yaml whenever it
+# changes (the filter lives in the repo README / launch tooling).
+# Routeplane AI Gateway — public OpenAPI contract.
+#
+# Maintenance invariants (community.html depends on them):
+#   * every operation carries `x-routeplane-edition: community | enterprise`
+#     (exactly that line, 6-space indented, inside the operation);
+#   * each path defines exactly ONE operation, so the Community view can filter
+#     whole path chunks;
+#   * Enterprise operations also carry Redoc `x-badges`.
+openapi: 3.1.0
+info:
+  title: Routeplane AI Gateway API
+  version: 0.1.32
+  description: |
+    **Routeplane** is a neutral, multi-provider AI Gateway — an SRE-grade,
+    OpenAI-compatible proxy in one Rust binary, in front of 15 providers, with
+    declarative routing, guardrails, budgets & rate limits, response caching,
+    and an enterprise upgrade path (sovereign data-residency routing, a
+    tamper-evident audit ledger, agentic security, and more).
+
+    ## Authentication
+    Two equivalent ways to present a Routeplane virtual key (`rp_`-prefixed):
+
+    * `x-routeplane-api-key: rp_…` — the branded primary header.
+    * `Authorization: Bearer rp_…` — the SDK-compatibility fallback. This is
+      the header every stock OpenAI SDK sends, so pointing an OpenAI SDK at
+      Routeplane needs only a `base_url` change plus your virtual key as the
+      API key.
+
+    Both resolve through the identical constant-time lookup. A non-`rp_`
+    Bearer value (e.g. a provider key such as `sk-…`) is **never** accepted
+    and never passed through — provider credentials are resolved server-side
+    from the virtual key. Missing/invalid credentials return a 401 with the
+    OpenAI error envelope (`code: invalid_api_key`).
+
+    ## Editions
+    One API surface, two editions. Every operation in this reference carries
+    the vendor extension `x-routeplane-edition: community | enterprise`.
+
+    * **Community** (open source, Apache-2.0): the OpenAI-compatible inference
+      surface — chat completions (buffered + streaming), the native Anthropic
+      Messages surface, embeddings, model discovery, moderations, rerank,
+      image generation, audio (speech, transcription, translation) — plus
+      routing strategies with fallback/retry/hedging, per-provider circuit
+      breaking, named combos, the exact-match response cache, rate/spend
+      limits, baseline PII masking, RTK token compression, the residency
+      classifier, and the observability reads (`/analytics`, `/v1/logs`,
+      `/status`, `/metrics`).
+    * **Enterprise** (commercial): sovereign data-residency **enforcement**
+      with the signed, hash-chained audit ledger and verifiable artifacts, the
+      agentic-security (MCP) gateway and agent governance, advanced guardrails
+      (webhook/ML detectors), the semantic cache, the versioned prompt
+      registry, FinOps export, durable telemetry retention, model-catalog
+      governance, and the multi-tenant control plane. Enterprise operations
+      are badged in this reference and are absent from the
+      [Community Edition view](community.html).
+
+    ## Providers
+    15 provider integrations: OpenAI, Anthropic, Google Gemini, Azure OpenAI,
+    Mistral, Cohere, Amazon Bedrock, Groq, DeepSeek, Together AI, Fireworks
+    AI, xAI (Grok), OpenRouter, a generic OpenAI-compatible `self_hosted`
+    adapter (vLLM / Ollama / LocalAI / any compatible endpoint), and a
+    built-in `local` moderation source. Select one — or a comma-separated
+    fallback chain — with `x-routeplane-provider`.
+
+    ## OpenAI compatibility
+    `POST /v1/chat/completions`, `POST /v1/embeddings`, `GET /v1/models`, and
+    the moderation/image/audio routes are byte-compatible with the OpenAI wire
+    shapes — point an OpenAI SDK's `base_url` at Routeplane and pass your
+    virtual key. Streaming uses standard `text/event-stream` chunks terminated
+    by `data: [DONE]`. `POST /v1/messages` additionally serves the native
+    Anthropic Messages shape so official Anthropic-SDK clients work unchanged.
+
+    ## Named combos
+    An operator can publish **combos** — saved routing chains addressable
+    straight from the OpenAI `model` field (no headers, no config). Combos are
+    listed by `GET /v1/models` with `owned_by: "routeplane"`; sending that id
+    as `model` executes the chain. Combos are a Community feature.
+
+    ## Sovereign routing
+    When a request carries regulated personal data (detected by the gateway's
+    classifier) **and** a residency jurisdiction applies (the
+    `x-routeplane-residency` header or the key's server-side default), routing
+    is hard-locked to providers resident in that jurisdiction. No client
+    header or routing config can widen the lock. If no resident provider is
+    available the request is refused with **422** rather than silently leaving
+    the jurisdiction. The classifier ships in Community; jurisdiction-locked
+    enforcement with the signed audit ledger is an Enterprise capability.
+
+    ## Routing configs
+    The `x-routeplane-config` header carries a JSON **envelope**:
+    `{"routing": {…}, "guardrails": {…}}`. The `routing` section selects
+    strategy, targets (with per-target weight/cost/timeout/retry/param-shaping
+    overrides), conditional routing over request metadata, and the `cache`
+    directive. Saved configs are referenced as `cfg_<id>`. Unknown envelope
+    sections and malformed configs fail loud with **400** — never silently
+    ignored. Inline/saved routing-config envelopes are an Enterprise
+    capability; named combos are the Community path to saved chains.
+
+    ## Capacity shedding
+    Under capacity pressure the gateway fast-fails with **503** plus
+    `x-routeplane-shed: capacity` and `Retry-After`, to protect the P99 tail —
+    distinct from a client-quota **429**. Shed counts are exposed at
+    `GET /metrics` (Prometheus) and `GET /status`.
+
+    ---
+    This document tracks gateway release **v0.1.32** and is verified against
+    the shipped surface.
+  contact:
+    name: Routeplane
+    url: https://routeplane.ai
+    email: hello@routeplane.ai
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: https://{gateway-host}
+    description: Your Routeplane deployment.
+    variables:
+      gateway-host:
+        default: gateway.example.com
+security:
+  - RouteplaneApiKey: []
+  - BearerAuth: []
+tags:
+  - name: Inference
+    description: OpenAI-compatible inference surface (plus the native Anthropic Messages surface)
+  - name: Models
+    description: OpenAI-compatible model discovery — the curated catalog plus operator-defined combos
+  - name: Observability
+    description: Usage analytics, request logs, latency percentiles, and feedback
+  - name: System
+    description: Unauthenticated probes and operational surfaces
+
+paths:
+  /v1/chat/completions:
+    post:
+      tags: [Inference]
+      operationId: createChatCompletion
+      x-routeplane-edition: community
+      summary: Create a chat completion (buffered or streaming)
+      description: |
+        OpenAI-compatible chat completions across the configured provider
+        chain, with fallback, retries (config-driven), hedged requests,
+        circuit breaking, PII masking, guardrails, budgets/rate limits,
+        optional exact-match caching, and sovereign routing. Supports OpenAI
+        tool calling (`tools` / `tool_choice` / `parallel_tool_calls`) and
+        multimodal content parts (text + `image_url`).
+
+        The `model` field may also name an operator-defined **combo** (a saved
+        routing chain listed by `GET /v1/models` with `owned_by:
+        "routeplane"`) — the gateway then executes the chain instead of
+        routing the literal model id.
+      parameters:
+        - $ref: '#/components/parameters/Provider'
+        - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/Residency'
+        - $ref: '#/components/parameters/Config'
+        - $ref: '#/components/parameters/Metadata'
+        - $ref: '#/components/parameters/UseCase'
+        - $ref: '#/components/parameters/Currency'
+        - $ref: '#/components/parameters/TimeoutMs'
+        - $ref: '#/components/parameters/PiiMode'
+        - $ref: '#/components/parameters/OutputMask'
+        - $ref: '#/components/parameters/CacheControl'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+      responses:
+        '200':
+          description: |
+            The completion. With `stream: true` the response is
+            `text/event-stream` of `ChatCompletionChunk` objects terminated by
+            `data: [DONE]`; the serving provider is echoed in
+            `x-routeplane-provider`. Cache-participating requests carry
+            `x-routeplane-cache`; limit-configured keys carry advisory
+            `x-ratelimit-*` headers. Every completion carries
+            `x-routeplane-trace-id` (and its alias `x-routeplane-request-id`)
+            for correlation and `POST /v1/feedback`.
+          headers:
+            x-routeplane-provider:
+              $ref: '#/components/headers/XProvider'
+            x-routeplane-trace-id:
+              $ref: '#/components/headers/XTraceId'
+            x-routeplane-request-id:
+              $ref: '#/components/headers/XRequestId'
+            x-routeplane-cache:
+              $ref: '#/components/headers/XCache'
+            x-routeplane-cache-degraded:
+              $ref: '#/components/headers/XCacheDegraded'
+            x-routeplane-hedged:
+              $ref: '#/components/headers/XHedged'
+            x-routeplane-idempotent-replayed:
+              $ref: '#/components/headers/XIdempotentReplayed'
+            x-routeplane-budget-warning:
+              $ref: '#/components/headers/XBudgetWarning'
+            x-routeplane-compliance-warning:
+              $ref: '#/components/headers/XComplianceWarning'
+            x-ratelimit-remaining-requests:
+              $ref: '#/components/headers/XRateLimitRemainingRequests'
+            x-ratelimit-remaining-tokens:
+              $ref: '#/components/headers/XRateLimitRemainingTokens'
+            x-routeplane-budget-remaining:
+              $ref: '#/components/headers/XBudgetRemaining'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponse'
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream of ChatCompletionChunk JSON objects.
+        '400':
+          description: Malformed routing config / metadata / inline guardrails config (`invalid_config`, `config_not_found`, `config_too_large`, `invalid_metadata`, `routeplane_guardrails_config_invalid`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          description: Budget exhausted (`insufficient_quota` / `routeplane_budget_exceeded`) with `Retry-After` and `x-routeplane-limit-*` headers.
+          headers:
+            x-routeplane-limit-type:
+              $ref: '#/components/headers/XLimitType'
+            x-routeplane-limit-scope:
+              $ref: '#/components/headers/XLimitScope'
+            x-routeplane-limit-policy:
+              $ref: '#/components/headers/XLimitPolicy'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '403':
+          description: |
+            The requested model is excluded by the organization's compliance
+            policy (`model_compliance_excluded`, `param: model`) — applies only
+            to tenants operating with compliance frameworks configured under
+            model-catalog governance (an Enterprise capability). In `warn`
+            mode the request proceeds and carries
+            `x-routeplane-compliance-warning` instead.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '422':
+          description: Sovereign routing refusal — the request carries regulated personal data and no jurisdiction-resident provider is eligible.
+          content:
+            text/plain:
+              schema: { type: string }
+        '429':
+          description: Rate limit exceeded (`rate_limit_exceeded` / `routeplane_rate_limit_exceeded`) with truthful `x-ratelimit-*` + `Retry-After` headers.
+          headers:
+            x-routeplane-limit-type:
+              $ref: '#/components/headers/XLimitType'
+            x-routeplane-limit-scope:
+              $ref: '#/components/headers/XLimitScope'
+            x-routeplane-limit-policy:
+              $ref: '#/components/headers/XLimitPolicy'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '446':
+          description: 'Request blocked by Routeplane guardrails (`routeplane_guardrails_denied`); the envelope carries per-check results under `x_routeplane.check_results` and the response carries `x-routeplane-guardrails: deny`.'
+          headers:
+            x-routeplane-guardrails:
+              $ref: '#/components/headers/XGuardrails'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: All eligible providers failed.
+          content:
+            text/plain:
+              schema: { type: string }
+        '503':
+          description: |
+            Capacity shed — the gateway fast-failed before queueing to protect
+            the P99 tail. Carries `x-routeplane-shed: capacity` and `Retry-After`.
+            Distinct from a client-quota 429.
+          headers:
+            x-routeplane-shed:
+              $ref: '#/components/headers/XShed'
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /v1/messages:
+    post:
+      tags: [Inference]
+      operationId: createMessage
+      x-routeplane-edition: community
+      summary: Create a message (native Anthropic surface)
+      description: |
+        The native Anthropic Messages API shape, so a client using the
+        official Anthropic SDK can point its `base_url` at the gateway
+        unchanged. This is a **translation surface** over the same pipeline as
+        `/v1/chat/completions` — residency classification, PII masking,
+        guardrails, limits, routing, caching, and usage accounting all apply
+        identically; it is not a policy bypass.
+
+        The provider chain defaults to `anthropic` (the caller is speaking the
+        Anthropic shape) but `x-routeplane-provider` overrides it — any
+        provider works, because translation goes through the provider-neutral
+        canonical shape.
+
+        **Streaming is not supported on this surface**: `stream: true` returns
+        a documented **400** (Anthropic error shape) directing the caller to
+        `POST /v1/chat/completions` with `"stream": true` (OpenAI-compatible
+        SSE). `max_tokens` is required (Anthropic contract); a missing value is
+        a 400 in the Anthropic error shape.
+
+        Errors raised by this handler (missing `max_tokens`, `stream: true`)
+        use Anthropic's `{"type":"error","error":{…}}` shape. Errors raised by
+        the shared pipeline (401 auth, 422 residency, 446 guardrail, 429/402
+        limits, 5xx upstream) keep the Routeplane/OpenAI envelope.
+      parameters:
+        - $ref: '#/components/parameters/Provider'
+        - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/Residency'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnthropicMessagesRequest'
+      responses:
+        '200':
+          description: The Anthropic-shaped message response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnthropicMessagesResponse' }
+        '400':
+          description: 'Missing `max_tokens`, or `stream: true` (unsupported on this surface) — Anthropic error shape.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnthropicError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422':
+          description: Sovereign routing refusal on the translated content (pipeline decision — Routeplane envelope, not Anthropic-shaped).
+          content:
+            text/plain:
+              schema: { type: string }
+        '429':
+          description: Rate limited (pipeline decision — OpenAI-shaped envelope).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: All eligible providers failed.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /v1/embeddings:
+    post:
+      tags: [Inference]
+      operationId: createEmbedding
+      x-routeplane-edition: community
+      summary: Create embeddings
+      description: |
+        OpenAI-compatible embeddings across the providers with a first-party
+        embeddings API (including OpenAI, Azure OpenAI, Gemini, Mistral,
+        Cohere, Together AI, and Fireworks AI). Inputs are
+        residency-classified and PII-masked by default (mask-then-embed).
+        `encoding_format: "base64"` is passed through verbatim. A provider
+        with no first-party embeddings (e.g. Anthropic) returns **422**
+        `embeddings_not_supported`. Embeddings are non-streaming and never
+        cached.
+      parameters:
+        - $ref: '#/components/parameters/Provider'
+        - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/Residency'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingRequest'
+      responses:
+        '200':
+          description: The embedding list (OpenAI shape).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmbeddingResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { description: Budget exhausted., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '422':
+          description: Sovereign refusal (text), or `embeddings_not_supported` (JSON envelope) when every attempted provider lacks first-party embeddings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { description: Rate limited., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '500': { description: All providers failed., content: { text/plain: { schema: { type: string } } } }
+
+  /v1/models:
+    get:
+      tags: [Models]
+      operationId: listModels
+      x-routeplane-edition: community
+      summary: List available models
+      description: |
+        The OpenAI-compatible model catalog: `{"object":"list","data":[…]}`.
+        The catalog is the curated set of well-known model ids per configured
+        provider (each entry's `owned_by` is the `x-routeplane-provider` name
+        to route to), plus any environment-discovered deployments
+        (`azure_openai`, `self_hosted`) and any operator-defined **combos**
+        (`owned_by: "routeplane"` — send the combo id as `model` to execute
+        the saved chain).
+
+        Entries may carry an additive `routeplane` extension object (cost,
+        modalities, capabilities, context window, compliance restrictions) —
+        OpenAI SDKs ignore it as an unknown field; entries with no known
+        metadata omit it entirely.
+      responses:
+        '200':
+          description: The model list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/models/{id}:
+    get:
+      tags: [Models]
+      operationId: retrieveModel
+      x-routeplane-edition: community
+      summary: Retrieve one model
+      description: The single OpenAI-shaped model object (base model or combo), or a 404 error envelope (`model_not_found`) for an unknown id.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, example: gpt-4o }
+          description: The model id as returned by `GET /v1/models`.
+      responses:
+        '200':
+          description: The model object.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelObject' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: Unknown model id (`model_not_found`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /v1/moderations:
+    post:
+      tags: [Inference]
+      operationId: createModeration
+      x-routeplane-edition: community
+      summary: Classify content (OpenAI-compatible moderation)
+      description: |
+        OpenAI-compatible content moderation. Default provider is `openai`
+        (`omni-moderation-latest`); the reserved sentinel `local` (alias
+        `routeplane`) runs the gateway's built-in deterministic moderator
+        in-process — no upstream key, no network call.
+
+        **Deliberate deviation from the other text routes**: moderation sends
+        the RAW input to the moderation source — no PII masking — because a
+        safety classifier must see the raw content to classify it. The
+        response carries only category labels and scores (never the matched
+        text). Residency classification and region eligibility still apply.
+      parameters:
+        - $ref: '#/components/parameters/Provider'
+        - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/Residency'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModerationRequest' }
+      responses:
+        '200':
+          description: Per-input moderation results (`results[i]` corresponds to input `i`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModerationResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { description: Budget exhausted., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '422':
+          description: Empty `input`, sovereign refusal, or `moderation_not_supported` when every attempted provider lacks a first-party moderation endpoint.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { description: Rate limited., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '500': { description: All providers failed., content: { text/plain: { schema: { type: string } } } }
+
+  /v1/rerank:
+    post:
+      tags: [Inference]
+      operationId: rerank
+      x-routeplane-edition: community
+      summary: Rerank documents by relevance
+      description: |
+        Cohere/LiteLLM-compatible reranking: a `query` plus candidate
+        `documents`, returned ordered by relevance (core to RAG pipelines).
+        Default provider is `cohere` (the canonical rerank backend — OpenAI
+        has no rerank endpoint); `x-routeplane-provider` overrides. The query
+        and every document are residency-classified then PII-masked before
+        egress. Non-streaming; never cached.
+      parameters:
+        - $ref: '#/components/parameters/Provider'
+        - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/Residency'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RerankRequest' }
+      responses:
+        '200':
+          description: Ranked results, ordered by `relevance_score` descending; `index` maps each result back to the request's `documents` order.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RerankResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { description: Budget exhausted., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '422':
+          description: Empty `documents` (`invalid_request_error`), sovereign refusal, or `rerank_not_supported` when every attempted provider lacks a first-party rerank endpoint.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { description: Rate limited., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '500': { description: All providers failed., content: { text/plain: { schema: { type: string } } } }
+
+  /v1/images/generations:
+    post:
+      tags: [Inference]
+      operationId: createImage
+      x-routeplane-edition: community
+      summary: Generate images
+      description: |
+        OpenAI-compatible image generation. Default provider is `openai`
+        (`gpt-image-1` / `dall-e-3`). The prompt is residency-classified then
+        PII-masked before egress (same posture as chat — image generation is
+        not a PII-egress bypass). Forward-compatible OpenAI fields the gateway
+        does not model explicitly (e.g. `style`, `background`, `user`) are
+        passed through verbatim.
+      parameters:
+        - $ref: '#/components/parameters/Provider'
+        - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/Residency'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImageGenerationRequest' }
+      responses:
+        '200':
+          description: The generated image batch (OpenAI shape) — each entry carries a hosted `url` or inline `b64_json` per the request's `response_format`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImageGenerationResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { description: Budget exhausted., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '422':
+          description: Sovereign refusal, or `image_generation_not_supported` when every attempted provider lacks a first-party image endpoint.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { description: Rate limited., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '500': { description: All providers failed., content: { text/plain: { schema: { type: string } } } }
+
+  /v1/audio/speech:
+    post:
+      tags: [Inference]
+      operationId: createSpeech
+      x-routeplane-edition: community
+      summary: Generate speech from text (TTS)
+      description: |
+        OpenAI-compatible text-to-speech. The request is JSON (the `input` is
+        text — residency-classified then PII-masked before egress); the
+        response is **binary audio** with a `Content-Type` matching the
+        requested `response_format` (`mp3` default; `opus`, `aac`, `flac`,
+        `wav`, `pcm`). Default provider is `openai` (`gpt-4o-mini-tts` /
+        `tts-1`).
+      parameters:
+        - $ref: '#/components/parameters/Provider'
+        - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/Residency'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SpeechRequest' }
+      responses:
+        '200':
+          description: Binary audio. The `Content-Type` follows the requested `response_format` (e.g. `audio/mpeg` for `mp3`).
+          content:
+            audio/mpeg:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { description: Budget exhausted., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '422':
+          description: Sovereign refusal, or a typed capability error when every attempted provider lacks a first-party TTS endpoint.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { description: Rate limited., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '500': { description: All providers failed., content: { text/plain: { schema: { type: string } } } }
+
+  /v1/audio/transcriptions:
+    post:
+      tags: [Inference]
+      operationId: createTranscription
+      x-routeplane-edition: community
+      summary: Transcribe audio to text (STT)
+      description: |
+        OpenAI-compatible speech-to-text. The inbound body is
+        `multipart/form-data` — a binary `file` part plus text fields (`model`
+        required; optional `language`, `prompt`, `response_format`,
+        `temperature`). This route rides a larger, audio-specific request-body
+        limit (default 26 MiB, override `RP_AUDIO_MAX_BODY_BYTES`) instead of
+        the 2 MiB global cap. Default provider is `openai` (`whisper-1`,
+        `gpt-4o-transcribe`); `groq` serves Whisper (`whisper-large-v3`,
+        `whisper-large-v3-turbo`).
+
+        Audio is binary: it cannot be text-PII-masked or content-classified
+        inbound (documented deviation). Residency **region eligibility** still
+        applies as a hard provider filter. Audio bytes are never logged.
+      parameters:
+        - $ref: '#/components/parameters/Provider'
+        - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/Residency'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, model]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The audio file (flac/mp3/mp4/mpeg/mpga/m4a/ogg/wav/webm).
+                model:
+                  type: string
+                  example: whisper-1
+                language:
+                  type: string
+                  description: Optional ISO-639-1 language hint (e.g. `en`).
+                prompt:
+                  type: string
+                  description: Optional prompt to guide style or continue a prior segment.
+                response_format:
+                  type: string
+                  enum: [json, text, srt, verbose_json, vtt]
+                  description: Output format (default `json`).
+                temperature:
+                  type: number
+                  description: Sampling temperature in [0, 1].
+      responses:
+        '200':
+          description: 'The transcription. The default (`json`) contract is `{"text": "…"}`; richer formats add provider fields (e.g. `verbose_json` adds `language`, `duration`, `segments`), which are passed through verbatim.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TranscriptionResponse' }
+        '400':
+          description: Missing `file` or `model` part.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { description: The upload exceeds the audio body limit. }
+        '422':
+          description: Sovereign region filter left no eligible provider, or `transcription_not_supported` when every attempted provider lacks first-party STT.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { description: Rate limited., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '500': { description: All providers failed., content: { text/plain: { schema: { type: string } } } }
+
+  /v1/audio/translations:
+    post:
+      tags: [Inference]
+      operationId: createTranslation
+      x-routeplane-edition: community
+      summary: Translate audio to English text
+      description: |
+        OpenAI-compatible audio translation — the near-twin of
+        `/v1/audio/transcriptions`: identical `multipart/form-data` contract
+        **except there is no `language` field** (the output is always
+        English). Same audio-specific body limit, same residency posture, same
+        provider selection (default `openai`; `groq` allowed). Whisper models
+        (`whisper-1`, `whisper-large-v3`) support translation; the
+        `gpt-4o-transcribe` models do not.
+      parameters:
+        - $ref: '#/components/parameters/Provider'
+        - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/Residency'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, model]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The audio file (flac/mp3/mp4/mpeg/mpga/m4a/ogg/wav/webm).
+                model:
+                  type: string
+                  example: whisper-1
+                prompt:
+                  type: string
+                  description: Optional prompt to guide style.
+                response_format:
+                  type: string
+                  enum: [json, text, srt, verbose_json, vtt]
+                  description: Output format (default `json`).
+                temperature:
+                  type: number
+                  description: Sampling temperature in [0, 1].
+      responses:
+        '200':
+          description: 'The English translation (`{"text": "…"}` for the default `json` format; richer provider fields pass through verbatim).'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TranscriptionResponse' }
+        '400':
+          description: Missing `file` or `model` part.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { description: The upload exceeds the audio body limit. }
+        '422':
+          description: Sovereign region filter left no eligible provider, or `translation_not_supported` when every attempted provider lacks first-party audio translation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { description: Rate limited., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '500': { description: All providers failed., content: { text/plain: { schema: { type: string } } } }
+
+  /v1/responses:
+    post:
+      tags: [Inference]
+      operationId: createResponseDeclined
+      x-routeplane-edition: community
+      summary: Not supported (documented 501)
+      description: |
+        The OpenAI Responses API is **intentionally not supported** by this
+        gateway. Instead of a bare unknown-route 404, the route returns a
+        typed **501** (`code: endpoint_not_supported`) directing the SDK to
+        `POST /v1/chat/completions`. The route is authenticated like the rest
+        of `/v1/*` — a missing key returns 401 first.
+      responses:
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '501':
+          description: '`endpoint_not_supported` — use `POST /v1/chat/completions` instead.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /v1/feedback:
+    post:
+      tags: [Observability]
+      operationId: submitFeedback
+      x-routeplane-edition: community
+      summary: Attach a quality score to a request trace
+      description: |
+        Attach a weighted quality score to a prior request (Portkey-compatible
+        contract). `trace_id` is the `x-routeplane-trace-id` header the
+        gateway emits on completions. Feedback is a gateway-control signal —
+        it never flows to a provider; it is recorded off the hot path into the
+        in-memory observability ring. The gateway validates shape (it does not
+        verify the trace still exists in the ring). Caller `metadata` is
+        bounded (at most 16 keys; keys and string values at most 256
+        characters; flat scalars only) — oversized metadata is rejected with
+        400, never silently truncated, and metadata values are not persisted
+        raw.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FeedbackRequest' }
+      responses:
+        '200':
+          description: Recorded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: recorded }
+                  trace_id: { type: string }
+        '400':
+          description: Validation failure (empty/oversized `trace_id`, `value` outside -10..=10, `weight` outside 0.0..=1.0, unbounded/non-object `metadata`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/logs:
+    get:
+      tags: [Observability]
+      operationId: listLogs
+      x-routeplane-edition: community
+      summary: Recent request logs (your keys only)
+      description: |
+        The authenticated tenant's most-recent request-log rows (newest
+        first, up to 200) from the in-memory observability ring (last ~1000
+        events). Tenant isolation is structural — the scope is the set of
+        virtual keys the caller's tenant owns, resolved server-side; no
+        client-supplied identifier ever selects the scope. Rows are sanitized
+        projections: labels, counts, and outcomes only — no request/response
+        content.
+      responses:
+        '200':
+          description: '`{"events": […]}` — the sanitized log rows, newest first.'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/RequestLogRow' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /analytics:
+    get:
+      tags: [Observability]
+      operationId: getAnalytics
+      x-routeplane-edition: community
+      summary: Recent usage events (your keys only)
+      description: |
+        The authenticated tenant's most-recent usage events from the
+        in-memory ring (last 1000 events, process-local): successes, failures,
+        sovereign blocks, guardrail denials, limit rejections — with token
+        counts, provider, model, region, cache and routing-config annotations.
+        Scoped to the caller's own virtual keys (resolved server-side — never
+        a client-supplied id).
+      responses:
+        '200':
+          description: Recent usage events.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/UsageEvent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /analytics/latency:
+    get:
+      tags: [Observability]
+      operationId: getLatencyStats
+      x-routeplane-edition: community
+      summary: Latency percentiles (overall + per provider)
+      description: |
+        Exact nearest-rank latency percentiles (p50/p95/p99/max, milliseconds)
+        over the timed provider attempts in the in-memory ring — overall and
+        per provider. Percentile fields are omitted when there are no samples
+        (never a misleading zero). Aggregates only — no per-tenant rows.
+      responses:
+        '200':
+          description: The latency report.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LatencyReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /status:
+    get:
+      tags: [System]
+      operationId: getStatus
+      x-routeplane-edition: community
+      summary: Platform status snapshot (no auth)
+      security: []
+      description: |
+        Read-only operational snapshot: per-provider circuit-breaker state and
+        latency EWMA, response-cache statistics, the cumulative capacity-shed
+        count, and a non-sensitive aggregate of recent usage. Carries only
+        aggregate operational state — no keys, tenant ids, bodies, or PII —
+        which is what makes it safe to serve unauthenticated (like
+        `/healthz`).
+      responses:
+        '200':
+          description: The status snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatusSnapshot' }
+
+  /healthz:
+    get:
+      tags: [System]
+      operationId: healthz
+      x-routeplane-edition: community
+      summary: Liveness probe (no auth)
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            text/plain:
+              schema: { type: string, example: OK }
+
+  /:
+    get:
+      tags: [System]
+      operationId: banner
+      x-routeplane-edition: community
+      summary: Service banner (no auth)
+      security: []
+      responses:
+        '200':
+          description: Plain-text service banner.
+          content:
+            text/plain:
+              schema: { type: string, example: "Routeplane AI Gateway (Rust) - Alpha" }
+
+  /metrics:
+    get:
+      tags: [System]
+      operationId: metrics
+      x-routeplane-edition: community
+      summary: Prometheus metrics (no auth)
+      security: []
+      description: |
+        SRE metrics in the **Prometheus text exposition format**
+        (`Content-Type: text/plain; version=0.0.4`) — not JSON. Metric
+        families (all lock-free atomic counters, reset on process restart):
+
+        * `rp_requests_total{provider, outcome}` — requests by provider and
+          outcome (`success`, `error`, `residency_blocked`,
+          `guardrail_denied`, `rate_limited`, `budget_exceeded`).
+        * `rp_request_duration_ms` — per-provider request-latency histogram
+          (cumulative `le` buckets, 50 ms – 60 s).
+        * `rp_tokens_total` — prompt/completion/cached token counters.
+        * `rp_cost_micro_usd_total` — attributed upstream cost in micro-USD.
+        * `rp_cache_events_total{type, result}` — cache lookups (`exact` /
+          `semantic` by result).
+        * `rp_provider_errors_total{provider}` — failed upstream attempts.
+        * `rp_hedged_wins_total` — responses served by a speculative hedge.
+        * `rp_shed_total` — cumulative capacity sheds (also mirrored under the
+          **deprecated** unprefixed alias `shed_total` for back-compat).
+
+        Label cardinality is bounded (the `provider` label collapses unknown
+        values to `other`); labels never carry tenant, key, model, or content
+        — which is what makes the endpoint safe to serve unauthenticated.
+      responses:
+        '200':
+          description: Prometheus text exposition.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  # TYPE rp_requests_total counter
+                  rp_requests_total{provider="openai",outcome="success"} 42
+                  # TYPE rp_shed_total counter
+                  rp_shed_total 0
+                  # TYPE shed_total counter
+                  shed_total 0
+
+components:
+  securitySchemes:
+    RouteplaneApiKey:
+      type: apiKey
+      in: header
+      name: x-routeplane-api-key
+      description: Routeplane virtual key (`rp_`-prefixed) — the branded primary header.
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        `Authorization: Bearer rp_…` — the SDK-compatibility fallback (the
+        header stock OpenAI SDKs send). Only `rp_`-prefixed gateway keys are
+        accepted; a provider key (`sk-…`, …) in this header is rejected with
+        401 and is never forwarded upstream.
+
+  parameters:
+    Provider:
+      name: x-routeplane-provider
+      in: header
+      required: false
+      schema: { type: string, example: "openai,anthropic" }
+      description: |
+        Provider or comma-separated fallback chain. Defaults per route
+        (`openai` for chat/embeddings/moderations/images/audio, `anthropic`
+        for /v1/messages, `cohere` for /v1/rerank). Superseded by a routing
+        config's targets, and **overridden by sovereign routing** when
+        regulated data + a residency jurisdiction apply.
+    Strategy:
+      name: x-routeplane-strategy
+      in: header
+      required: false
+      schema: { type: string, enum: [priority, weighted, cost, latency] }
+      description: Candidate-ordering strategy (default `priority`). Superseded by a routing config.
+    Residency:
+      name: x-routeplane-residency
+      in: header
+      required: false
+      schema: { type: string, example: IN }
+      description: |
+        Requested data-residency jurisdiction. Enforced (hard region lock) only
+        when the request also carries regulated personal data. Can narrow but
+        never disable the key's server-side default. Jurisdiction-locked
+        enforcement with the signed audit ledger is an Enterprise capability.
+    Config:
+      name: x-routeplane-config
+      in: header
+      required: false
+      schema: { type: string }
+      description: |
+        JSON envelope `{"routing": {…}, "guardrails": {…}}` (≤ 8 KiB) or a
+        saved-config reference `cfg_<id>`. The routing section: strategy,
+        targets with per-target `weight`/`cost`/`timeout_ms`/`retry`/`params`
+        overrides, nested pools, `conditions` + `default_target`, `timeout_ms`,
+        and the `cache` directive (`mode` required: `simple` | `semantic`;
+        `ttl_seconds`, `namespace`, `force_refresh`, `max_response_bytes`).
+        Malformed or unknown-section configs fail loud with 400. Routing-config
+        envelopes are an Enterprise capability (named combos are the Community
+        path to saved chains); `mode: semantic` additionally requires the
+        semantic-cache entitlement (it degrades loudly via
+        `x-routeplane-cache-degraded` otherwise).
+    Metadata:
+      name: x-routeplane-metadata
+      in: header
+      required: false
+      schema: { type: string }
+      description: JSON object (≤ 4 KiB) of scalar values addressable from routing conditions as `metadata.<key>`.
+    UseCase:
+      name: x-routeplane-use-case
+      in: header
+      required: false
+      schema: { type: string, example: support-summarizer }
+      description: |
+        Free-form business-process / use-case label recorded on this request's
+        usage event, for cost attribution down to the business process in the
+        analytics/FinOps reads.
+    Currency:
+      name: x-routeplane-currency
+      in: header
+      required: false
+      schema: { type: string, example: INR }
+      description: Requested display currency for cost annotations on this request's usage records. Canonical cost accounting stays in micro-USD.
+    TimeoutMs:
+      name: x-routeplane-timeout-ms
+      in: header
+      required: false
+      schema: { type: integer, example: 15000 }
+      description: |
+        Per-request deadline override in milliseconds. Narrow-only — the value
+        is MIN-folded with the server's configured deadline, so a client can
+        tighten but never widen it.
+    PiiMode:
+      name: x-routeplane-pii-mode
+      in: header
+      required: false
+      schema: { type: string, enum: [tokenize] }
+      description: |
+        `tokenize` requests reversible tokenization instead of irreversible
+        masking for detected PII: surrogates go upstream and the originals are
+        restored on egress. Requires the reversible-tokenization capability
+        and a configured tokenization key; otherwise the request degrades to
+        standard masking (logged, never silent).
+    OutputMask:
+      name: x-routeplane-output-mask
+      in: header
+      required: false
+      schema: { type: string, enum: [pii, secrets, all, "true"] }
+      description: |
+        Opt-in output-masking annotation: asserts (and records on the usage
+        event) that response-side PII masking applies to this request.
+        Baseline response masking runs regardless; unrecognized values are
+        ignored (fail-open for this opt-in control). Ignored when reversible
+        tokenization is active (egress restoration takes precedence).
+    CacheControl:
+      name: x-routeplane-cache-control
+      in: header
+      required: false
+      schema: { type: string, enum: [no-store] }
+      description: |
+        `no-store` bypasses the response cache for this request (no read, no
+        write); the response then reports `x-routeplane-cache: bypass`. Only
+        `no-store` is honored today.
+    IdempotencyKey:
+      name: x-routeplane-idempotency-key
+      in: header
+      required: false
+      schema: { type: string }
+      description: |
+        Idempotency key for safe retries. The standard `Idempotency-Key`
+        header is also accepted (it takes precedence). A replayed request
+        returns the recorded response with
+        `x-routeplane-idempotent-replayed: true` without re-running the
+        pipeline.
+    Cohort:
+      name: x-routeplane-cohort
+      in: header
+      required: false
+      schema: { type: string }
+      description: Explicit A/B cohort key for prompt-variant selection (overrides the derived cohort).
+    PromptReference:
+      name: reference
+      in: path
+      required: true
+      schema: { type: string, example: prompt_greeting@prod }
+      description: "`prompt_<slug>`, `prompt_<slug>@<label>`, or `prompt_<slug>@v<N>`."
+
+  headers:
+    XProvider:
+      schema: { type: string }
+      description: The provider that served the response (echoed on streamed responses).
+    XTraceId:
+      schema: { type: string, example: req_9f2c1a7bd0e14bd2a3f8c14be9d3a001 }
+      description: Per-request correlation id (`req_<uuid>`). Reference it in `POST /v1/feedback`.
+    XRequestId:
+      schema: { type: string }
+      description: Alias of `x-routeplane-trace-id` (identical value), kept for clients using either name.
+    XCache:
+      schema: { type: string, enum: [hit, miss, refreshed, semantic-hit, bypass] }
+      description: Cache verdict — present only when a cache directive applied to the request.
+    XCacheDegraded:
+      schema: { type: string, example: semantic_requires_standard }
+      description: Present when the requested cache mode degraded (e.g. `semantic` without the semantic-cache entitlement) or the cache backend was unavailable.
+    XHedged:
+      schema: { type: string }
+      description: Present when the winning response came from a speculative hedge attempt rather than the primary target.
+    XIdempotentReplayed:
+      schema: { type: string, enum: ["true"] }
+      description: Present when this response was replayed from a recorded idempotent result (the pipeline did not re-run).
+    XBudgetWarning:
+      schema: { type: string }
+      description: Advisory soft-budget warning — spend is approaching the configured budget.
+    XComplianceWarning:
+      schema: { type: string }
+      description: Present when the requested model is restricted under the tenant's compliance frameworks and the tenant runs in `warn` mode (the request proceeded).
+    XGuardrails:
+      schema: { type: string, enum: [deny] }
+      description: Present on guardrail denials (HTTP 446).
+    XLimitType:
+      schema: { type: string }
+      description: Which limit tripped (rate vs spend family).
+    XLimitScope:
+      schema: { type: string }
+      description: The scope the tripped limit applied at (e.g. key or tenant).
+    XLimitPolicy:
+      schema: { type: string }
+      description: The identifier of the limit policy that tripped.
+    XRateLimitRemainingRequests:
+      schema: { type: integer }
+      description: Advisory remaining requests in the current window (limit-configured keys only).
+    XRateLimitRemainingTokens:
+      schema: { type: integer }
+      description: Advisory remaining tokens in the current window (limit-configured keys only).
+    XBudgetRemaining:
+      schema: { type: string }
+      description: Advisory remaining spend budget (budget-configured keys only).
+    XShed:
+      schema: { type: string, enum: [capacity] }
+      description: Present on capacity-shed 503s.
+
+  responses:
+    Unauthorized:
+      description: |
+        Missing or invalid gateway credential (`x-routeplane-api-key` or
+        `Authorization: Bearer rp_…`). OpenAI-shaped envelope with
+        `code: invalid_api_key`. A suspended/closed tenant returns the same
+        envelope (no existence/state leak).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    PromptForbidden:
+      description: The tenant lacks the prompt-registry entitlement (`feature_not_entitled`) or the feature is held back (`feature_not_released`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    PromptNotFound:
+      description: Unknown prompt (`prompt_not_found`) or unknown label/version (`prompt_version_not_found`). Cross-tenant prompts are indistinguishable from missing ones.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  schemas:
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model:
+          type: string
+          example: gpt-4o
+          description: |
+            A model id (see `GET /v1/models`) — or the name of an
+            operator-defined **combo** (`owned_by: "routeplane"` in the model
+            list), which executes the saved routing chain.
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/Message' }
+        temperature: { type: number }
+        top_p: { type: number }
+        stream: { type: boolean, default: false }
+        max_tokens: { type: integer }
+        stop:
+          description: One stop string, or an array of stop strings (both OpenAI wire forms are accepted).
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+        n: { type: integer }
+        presence_penalty: { type: number }
+        frequency_penalty: { type: number }
+        user: { type: string }
+        tools:
+          type: array
+          items: { $ref: '#/components/schemas/Tool' }
+          description: Tool/function definitions the model may call (OpenAI tool calling). Translated to each provider's native shape.
+        tool_choice:
+          description: |
+            How the model chooses a tool: a string (`"auto"`, `"none"`,
+            `"required"`) or an object
+            (`{"type":"function","function":{"name":"…"}}`) — both OpenAI
+            forms round-trip verbatim.
+          oneOf:
+            - type: string
+            - type: object
+        parallel_tool_calls:
+          type: boolean
+          description: Whether the model may emit multiple tool calls in one turn. Omitted ⇒ the provider's default.
+        response_format:
+          type: object
+          description: |
+            Output-format control — JSON mode (`{"type":"json_object"}`) or
+            structured outputs (`{"type":"json_schema","json_schema":{…}}`),
+            passed through verbatim to providers that support it and mapped or
+            stripped for those that don't.
+        seed:
+          type: integer
+          description: Deterministic-sampling seed (best-effort; OpenAI-family providers).
+        logprobs: { type: boolean }
+        top_logprobs: { type: integer, minimum: 0, maximum: 20 }
+        logit_bias:
+          type: object
+          additionalProperties: { type: number }
+          description: Token-id → bias map (−100..100; OpenAI-family providers).
+        service_tier: { type: string }
+        reasoning_effort:
+          type: string
+          enum: [low, medium, high]
+          description: Reasoning-effort hint for reasoning models (OpenAI-family providers).
+    Message:
+      type: object
+      required: [role]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
+        content:
+          description: |
+            Plain text, or an array of multimodal content parts (text +
+            `image_url`). May be `null` on an assistant message that carries
+            `tool_calls` (the OpenAI convention).
+          oneOf:
+            - type: string
+            - type: array
+              items: { $ref: '#/components/schemas/ContentPart' }
+            - type: 'null'
+        name: { type: string }
+        cache_control:
+          type: object
+          description: |
+            Provider-native prompt-caching marker (canonically
+            `{"type":"ephemeral"}`): marks this message as a cache breakpoint
+            on providers with explicit prompt caching (Anthropic); stripped
+            for providers that reject unknown fields.
+        tool_calls:
+          type: array
+          items: { $ref: '#/components/schemas/ToolCall' }
+          description: Tool calls the assistant made (present on assistant messages; echo them back on the assistant turn of a tool conversation).
+        tool_call_id:
+          type: string
+          description: On a `role:"tool"` message — the id of the `ToolCall` this result answers.
+    ContentPart:
+      description: One part of a multimodal content array (OpenAI shape, discriminated by `type`).
+      oneOf:
+        - $ref: '#/components/schemas/TextContentPart'
+        - $ref: '#/components/schemas/ImageContentPart'
+    TextContentPart:
+      type: object
+      required: [type, text]
+      properties:
+        type: { type: string, enum: [text] }
+        text: { type: string }
+        cache_control:
+          type: object
+          description: Optional provider-native prompt-caching marker on this block.
+    ImageContentPart:
+      type: object
+      required: [type, image_url]
+      properties:
+        type: { type: string, enum: [image_url] }
+        image_url:
+          type: object
+          required: [url]
+          properties:
+            url:
+              type: string
+              description: HTTP(S) URL or a base64 data URI (`data:image/png;base64,…`).
+            detail:
+              type: string
+              enum: [low, high, auto]
+    Tool:
+      type: object
+      required: [type, function]
+      properties:
+        type: { type: string, enum: [function] }
+        function: { $ref: '#/components/schemas/FunctionDef' }
+    FunctionDef:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        parameters:
+          type: object
+          description: The function's parameter schema (JSON Schema), carried verbatim.
+    ToolCall:
+      type: object
+      required: [id, type, function]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [function] }
+        function:
+          type: object
+          required: [name, arguments]
+          properties:
+            name: { type: string }
+            arguments:
+              type: string
+              description: The arguments as a JSON-encoded STRING (OpenAI's wire contract) — parse it client-side.
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: chat.completion }
+        created: { type: integer }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              message: { $ref: '#/components/schemas/Message' }
+              finish_reason: { type: string }
+              logprobs:
+                type: object
+                description: Per-choice log-probability payload — present only when requested and reported by the upstream.
+        usage: { $ref: '#/components/schemas/Usage' }
+        system_fingerprint:
+          type: string
+          description: Upstream backend fingerprint — passthrough, present only when the provider reports it.
+        service_tier:
+          type: string
+          description: The service tier that processed the request — passthrough, present only when the provider reports it.
+    Usage:
+      type: object
+      properties:
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        total_tokens: { type: integer }
+        cached_tokens:
+          type: integer
+          description: Prompt tokens served from a provider prompt cache (the cached SUBSET of `prompt_tokens`) — present only when the provider reports cache reads.
+        cache_creation_tokens:
+          type: integer
+          description: Prompt tokens written into a provider prompt cache on this request — present only when the provider reports cache creation.
+    AnthropicMessagesRequest:
+      type: object
+      required: [model, max_tokens, messages]
+      description: The native Anthropic Messages request. Unknown/extra Anthropic fields are tolerated. `stream` must not be `true` on this surface (documented 400).
+      properties:
+        model: { type: string, example: claude-3-5-sonnet-latest }
+        max_tokens:
+          type: integer
+          description: Required (Anthropic contract) — a missing value returns an Anthropic-shaped 400.
+        system:
+          description: Top-level system prompt — a bare string or an array of blocks.
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: object }
+        messages:
+          type: array
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role: { type: string, enum: [user, assistant] }
+              content:
+                description: A bare string or an ordered array of typed content blocks (text/image blocks are mapped; other block types are tolerated).
+                oneOf:
+                  - type: string
+                  - type: array
+                    items: { type: object }
+        temperature: { type: number }
+        top_p: { type: number }
+        stop_sequences:
+          type: array
+          items: { type: string }
+        stream:
+          type: boolean
+          description: Must be `false`/absent — `true` returns a documented 400 pointing to `/v1/chat/completions` streaming.
+    AnthropicMessagesResponse:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string, example: message }
+        role: { type: string, example: assistant }
+        model: { type: string }
+        content:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string, example: text }
+              text: { type: string }
+        stop_reason:
+          type: string
+          enum: [end_turn, max_tokens, stop_sequence, tool_use]
+        stop_sequence:
+          type: ['string', 'null']
+        usage:
+          type: object
+          properties:
+            input_tokens: { type: integer }
+            output_tokens: { type: integer }
+            cache_read_input_tokens:
+              type: integer
+              description: Present only when the provider reported prompt-cache reads.
+            cache_creation_input_tokens:
+              type: integer
+              description: Present only when the provider reported prompt-cache writes.
+    AnthropicError:
+      type: object
+      properties:
+        type: { type: string, example: error }
+        error:
+          type: object
+          properties:
+            type: { type: string, example: invalid_request_error }
+            message: { type: string }
+    EmbeddingRequest:
+      type: object
+      required: [model, input]
+      properties:
+        model: { type: string, example: text-embedding-3-small }
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+        encoding_format: { type: string, enum: [float, base64] }
+        dimensions: { type: integer }
+        user: { type: string }
+    EmbeddingResponse:
+      type: object
+      properties:
+        object: { type: string, example: list }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              object: { type: string, example: embedding }
+              index: { type: integer }
+              embedding:
+                oneOf:
+                  - type: array
+                    items: { type: number }
+                  - type: string
+                    description: Base64-encoded vector when `encoding_format` is `base64`.
+        model: { type: string }
+        usage:
+          type: object
+          properties:
+            prompt_tokens: { type: integer }
+            total_tokens: { type: integer }
+    ModelList:
+      type: object
+      properties:
+        object: { type: string, example: list }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/ModelObject' }
+    ModelObject:
+      type: object
+      description: The OpenAI model object, optionally extended with an additive `routeplane` metadata block (omitted when nothing is known — OpenAI SDKs ignore it).
+      properties:
+        id: { type: string, example: gpt-4o }
+        object: { type: string, example: model }
+        created:
+          type: integer
+          description: Unix epoch seconds. Stable per catalog entry.
+        owned_by:
+          type: string
+          description: The provider that owns the model — the `x-routeplane-provider` name to route to. `routeplane` marks an operator-defined combo.
+        routeplane:
+          type: object
+          description: Additive Routeplane catalog metadata (not part of the OpenAI contract). Fields are present only where confidently known.
+          properties:
+            cost:
+              type: object
+              description: Per-1k-token economics in integer micro-USD, derived from the gateway price book.
+              properties:
+                input_per_1k_micro_usd: { type: integer }
+                output_per_1k_micro_usd: { type: integer }
+                normalized_cost_param:
+                  type: number
+                  description: Deterministic 0..1 cost band (cheap → 0, premium → 1) used as the cost-routing signal.
+                source: { type: string, example: routeplane_price_book }
+            modalities:
+              type: array
+              items: { type: string, enum: [text, audio, vision, embeddings] }
+            capabilities:
+              type: array
+              items: { type: string, enum: [function-calling, json-mode, long-context, streaming] }
+            context_window:
+              type: integer
+              description: Max context window in tokens, where confidently known.
+            compliance_restrictions:
+              type: array
+              items: { type: string }
+              description: Compliance frameworks that do NOT accept this model (e.g. no data-residency guarantee or no BAA); consumed by model-catalog governance (Enterprise). Omitted when empty.
+    ModerationRequest:
+      type: object
+      required: [input]
+      properties:
+        input:
+          description: One string, or an ordered batch (one result per input).
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+        model:
+          type: string
+          example: omni-moderation-latest
+          description: Absent ⇒ the provider's default.
+    ModerationResponse:
+      type: object
+      properties:
+        id: { type: string, example: modr-5f2d… }
+        model: { type: string }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              flagged: { type: boolean }
+              categories:
+                type: object
+                additionalProperties: { type: boolean }
+                description: Per-category boolean flags. The key set is whatever taxonomy the moderation source emitted.
+              category_scores:
+                type: object
+                additionalProperties: { type: number }
+                description: Per-category probability scores (same key set as `categories`).
+    RerankRequest:
+      type: object
+      required: [model, query, documents]
+      properties:
+        model: { type: string, example: rerank-v3.5 }
+        query: { type: string }
+        documents:
+          type: array
+          items: { type: string }
+          description: Ordered candidate documents. Must be non-empty. The response's `index` maps back to this order.
+        top_n:
+          type: integer
+          description: Cap on the number of ranked results. Absent ⇒ the provider's default (all documents ranked).
+        return_documents:
+          type: boolean
+          default: false
+          description: Echo the document text back in each result.
+    RerankResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Provider-supplied request id, when present.
+        model: { type: string }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+                description: Index into the request's `documents` array.
+              relevance_score:
+                type: number
+                description: Relevance in [0, 1] — higher is more relevant. Results are ordered descending.
+              document:
+                type: object
+                description: Present only when the request set `return_documents:true`.
+                properties:
+                  text: { type: string }
+        usage:
+          type: object
+          properties:
+            search_units:
+              type: integer
+              description: Provider-billed search units (Cohere bills rerank in search units, not tokens). 0 when the provider omits it.
+            total_tokens:
+              type: integer
+              description: Total billable units for this call (equals `search_units` today).
+    ImageGenerationRequest:
+      type: object
+      required: [prompt]
+      description: Only `prompt` is required. Any other OpenAI field the gateway does not model explicitly is passed through verbatim (not silently dropped).
+      properties:
+        prompt: { type: string }
+        model:
+          type: string
+          example: gpt-image-1
+          description: Absent ⇒ the provider's default (`gpt-image-1` on OpenAI).
+        n: { type: integer, description: Number of images (absent ⇒ 1). }
+        size: { type: string, example: 1024x1024 }
+        quality:
+          type: string
+          description: Rendering quality (`standard`/`hd` for dall-e-3; `high`/`medium`/`low` for gpt-image-1).
+        response_format:
+          type: string
+          enum: [url, b64_json]
+          description: Absent ⇒ the provider's default (gpt-image-1 is always b64; dall-e-3 defaults to url).
+      additionalProperties: true
+    ImageGenerationResponse:
+      type: object
+      properties:
+        created: { type: integer }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              url: { type: string }
+              b64_json: { type: string }
+              revised_prompt:
+                type: string
+                description: Present for models that rewrite the prompt before generating (dall-e-3).
+        usage:
+          type: object
+          description: Present when the upstream returns a usage block (gpt-image-1); echoed verbatim.
+    SpeechRequest:
+      type: object
+      required: [input, voice]
+      description: Any other OpenAI field the gateway does not model explicitly is passed through verbatim.
+      properties:
+        model:
+          type: string
+          example: gpt-4o-mini-tts
+          description: Absent ⇒ the provider's default.
+        input:
+          type: string
+          description: The text to synthesize (PII-masked before egress).
+        voice: { type: string, example: alloy }
+        response_format:
+          type: string
+          enum: [mp3, opus, aac, flac, wav, pcm]
+          description: Output container (default `mp3`). Drives the response `Content-Type`.
+        speed:
+          type: number
+          minimum: 0.25
+          maximum: 4.0
+      additionalProperties: true
+    TranscriptionResponse:
+      type: object
+      properties:
+        text: { type: string }
+      additionalProperties: true
+      description: 'The default (`json`) contract is `{"text": "…"}`. Richer formats (`verbose_json`) add provider fields (`language`, `duration`, `segments`, `words`, …), passed through verbatim.'
+    FeedbackRequest:
+      type: object
+      required: [trace_id, value]
+      properties:
+        trace_id:
+          type: string
+          maxLength: 256
+          description: The `x-routeplane-trace-id` of the request this feedback refers to.
+        value:
+          type: integer
+          minimum: -10
+          maximum: 10
+          description: Weighted quality score.
+        weight:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          description: Relative weight (absent ⇒ 1.0).
+        metadata:
+          type: object
+          description: Optional flat object — at most 16 keys; keys and string values at most 256 characters. Values are bounded/label-cleaned; only an accepted-key count is retained.
+    RequestLogRow:
+      type: object
+      description: A sanitized request-log projection — labels, counts, and outcomes only; no request/response content.
+      properties:
+        id:
+          type: string
+          example: log_a41f9c02
+          description: Synthesized stable id within a snapshot read.
+        timestamp: { type: string, format: date-time }
+        virtual_key_name: { type: string }
+        provider: { type: string }
+        model: { type: string }
+        outcome: { type: string, enum: [success, error, blocked] }
+        error:
+          type: string
+          description: Failure/block detail sentinel — present only when not a success.
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        total_tokens: { type: integer }
+        latency_ms: { type: integer }
+        cost_micro_usd:
+          type: integer
+          description: Canonical cost in micro-USD, when the attempt was priced.
+        region: { type: string }
+        sovereign_routed: { type: boolean }
+        cache_status:
+          type: string
+          enum: [hit, miss, refreshed, semantic_hit, bypass]
+        guardrails:
+          type: array
+          description: Guardrail check outcomes reduced to labels (check id + verdict) — never detail strings.
+          items:
+            type: object
+            additionalProperties: true
+        use_case:
+          type: string
+          description: The `x-routeplane-use-case` label, when the request was tagged.
+    UsageEvent:
+      type: object
+      description: One usage event. Additive annotations (latency, cost, use-case labels, guardrail labels) may be present beyond the fields listed here.
+      properties:
+        timestamp: { type: string, format: date-time }
+        virtual_key_name: { type: string }
+        provider: { type: string }
+        model: { type: string }
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        total_tokens: { type: integer }
+        region: { type: string }
+        sovereign_routed: { type: boolean }
+        success: { type: boolean }
+        error: { type: string }
+        cache_status: { type: string, enum: [hit, miss, refreshed, semantic_hit, bypass] }
+        config_ref: { type: string, enum: [inline, saved] }
+        config_match: { type: string }
+        prompt_id: { type: string }
+        prompt_version: { type: integer }
+        latency_ms: { type: integer }
+        use_case: { type: string }
+      additionalProperties: true
+    LatencyReport:
+      type: object
+      properties:
+        overall: { $ref: '#/components/schemas/LatencyPercentiles' }
+        by_provider:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/LatencyPercentiles' }
+    LatencyPercentiles:
+      type: object
+      description: Exact nearest-rank percentiles in milliseconds. Percentile fields are omitted when `count` is 0.
+      properties:
+        count: { type: integer }
+        p50_ms: { type: integer }
+        p95_ms: { type: integer }
+        p99_ms: { type: integer }
+        max_ms: { type: integer }
+    StatusSnapshot:
+      type: object
+      properties:
+        shed_total:
+          type: integer
+          description: Cumulative capacity sheds since process start.
+        providers:
+          type: array
+          items:
+            type: object
+            properties:
+              provider: { type: string }
+              circuit: { type: string, enum: [closed, half_open, open] }
+              latency_ewma_ms:
+                type: ['number', 'null']
+                description: Latency EWMA in ms — null until the first sample.
+        cache:
+          type: object
+          properties:
+            hits: { type: integer }
+            misses: { type: integer }
+            hit_rate: { type: number }
+            entries: { type: integer }
+            approx_bytes: { type: integer }
+            oversize_drops: { type: integer }
+            write_drops: { type: integer }
+        usage:
+          type: object
+          description: Non-sensitive aggregate of the recent usage ring (window size, success/failure counts, per-provider counts) — no keys, models, or content.
+          additionalProperties: true
+    StoredPromptVersion:
+      type: object
+      properties:
+        prompt_id: { type: string, example: prompt_greeting }
+        version: { type: integer }
+        template: { type: string }
+        variables:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              required: { type: boolean, default: true }
+        default_model: { type: string }
+        default_params: { type: object, additionalProperties: true }
+    RenderRequest:
+      type: object
+      properties:
+        variables:
+          type: object
+          additionalProperties: true
+        missing:
+          type: string
+          enum: [error, empty]
+          default: error
+    RenderResponse:
+      type: object
+      properties:
+        prompt_id: { type: string }
+        version: { type: integer }
+        label: { type: string }
+        model: { type: string }
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role: { type: string }
+              content: { type: string }
+    PromptCompletionsRequest:
+      allOf:
+        - $ref: '#/components/schemas/RenderRequest'
+        - type: object
+          description: Plus any ChatCompletionRequest field as an override (model, temperature, stream, …).
+          additionalProperties: true
+    ErrorEnvelope:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message: { type: string }
+            type: { type: string, example: invalid_request_error }
+            param: { type: ['string', 'null'] }
+            code: { type: string, example: routeplane_rate_limit_exceeded }
+        x_routeplane:
+          type: object
+          description: Routeplane-branded detail (e.g. guardrail check_results on 446).
+          additionalProperties: true
+    McpInspectRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          description: The tool-result content to inspect before it re-enters the model context.
+    McpAuthorizeRequest:
+      type: object
+      required: [agent_id, server, tool]
+      properties:
+        agent_id: { type: string, description: The acting agent, resolved against the configured agent registry. }
+        server: { type: string, description: The MCP server the tool call targets. }
+        tool: { type: string, description: The tool being invoked. }
+        argument_urls:
+          type: array
+          items: { type: string }
+          description: URLs the tool call would reach — each checked against the SSRF egress guard.
+    McpRunStepRequest:
+      type: object
+      required: [agent_id, run_id]
+      properties:
+        agent_id: { type: string }
+        run_id: { type: string }
+        cost_micro_usd: { type: integer, default: 0, description: Spend to attribute to this step, in micro-USD. }
+    McpVerdict:
+      type: object
+      properties:
+        outcome: { type: string, enum: [allow, deny] }
+        reason: { type: string, description: Why it was denied (secret-free, structured) — present only on deny. }
+    McpRunStepResponse:
+      type: object
+      properties:
+        decision: { type: string, enum: [continue, stop] }
+        reason: { type: string, description: Why the run was stopped (loop ceiling / budget / killed) — present only on stop. }
+        iterations: { type: integer, description: Iterations consumed by the run so far. }
