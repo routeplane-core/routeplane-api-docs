@@ -203,6 +203,8 @@ paths:
               $ref: '#/components/headers/XBudgetWarning'
             x-routeplane-compliance-warning:
               $ref: '#/components/headers/XComplianceWarning'
+            x-routeplane-pii-masked:
+              $ref: '#/components/headers/XPiiMasked'
             x-ratelimit-remaining-requests:
               $ref: '#/components/headers/XRateLimitRemainingRequests'
             x-ratelimit-remaining-tokens:
@@ -249,6 +251,9 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '422':
           description: Sovereign routing refusal — the request carries regulated personal data and no jurisdiction-resident provider is eligible.
+          headers:
+            x-routeplane-pii-masked:
+              $ref: '#/components/headers/XPiiMasked'
           content:
             text/plain:
               schema: { type: string }
@@ -1161,6 +1166,9 @@ components:
     XShed:
       schema: { type: string, enum: [capacity] }
       description: Present on capacity-shed 503s.
+    XPiiMasked:
+      schema: { type: integer, minimum: 1 }
+      description: Count of inbound message parts the always-on ingress PII/secret redact masked. Present only when >= 1; OMITTED on clean traffic (N=0). Its absence on regulated-data traffic indicates masking is disabled — treat as an alarm, not a normal clean response.
 
   responses:
     Unauthorized:
