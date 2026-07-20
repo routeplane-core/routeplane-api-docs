@@ -102,6 +102,28 @@ info:
     distinct from a client-quota **429**. Shed counts are exposed at
     `GET /metrics` (Prometheus) and `GET /status`.
 
+    ## Error codes
+    Every error is the OpenAI envelope
+    `{"error": {"message", "type", "code"}}`, and the `code` follows one rule:
+    codes that exist in OpenAI's own API keep OpenAI's spelling verbatim
+    (`invalid_api_key`, `model_not_found`, `invalid_request_error`) so an SDK's
+    error branch fires unchanged; every gateway-original failure class carries
+    the `routeplane_` prefix — apart from a small frozen set of early codes
+    that shipped unprefixed and stay that way for client compatibility.
+    The ones to branch on:
+
+    | code | status | meaning |
+    |---|---|---|
+    | `invalid_api_key` | 401 | Missing/invalid gateway key (also non-Active tenants — no state leak). |
+    | `feature_not_entitled` | 403 | The surface needs an entitlement your plan/key does not carry. |
+    | `feature_not_released` | 403 | Entitled, but the capability is held back (staged rollout). |
+    | `routeplane_sovereign_block` | 422 | Regulated data + residency lock with no resident provider — refused, never relocated. |
+    | `routeplane_guardrails_denied` | 446 | A guardrail denied the request/response. |
+    | `routeplane_invalid_filter` | 400 | A read filter must be a closed-vocabulary label (`[a-z0-9_]`, max 32). |
+    | `read_rate_limited` | 429 | Per-tenant cap on durable read endpoints (`type: rate_limit_error`, with `Retry-After`). |
+    | `telemetry_store_unavailable` | 503 | The durable telemetry plane is not armed (or briefly unreadable) on this deployment. |
+    | `endpoint_not_supported` | 501 | A deliberately-unsupported route, with a pointer to the supported one. |
+
     ---
     This document tracks gateway release **v0.1.32** and is verified against
     the shipped surface.
@@ -129,7 +151,14 @@ tags:
   - name: Prompts
     description: Prompt registry — versioned prompts, labels, server-side render (Enterprise)
   - name: Agentic security
-    description: MCP-gateway enforcement points — tool-result inspection, tool-call authorization, and agent-run governance (Enterprise)
+    description: |
+      MCP-gateway enforcement points — tool-result inspection, tool-call
+      authorization, and agent-run governance (Enterprise). This reference
+      currently documents the three sidecar enforcement calls; the wider
+      shipped surface — run listings, human-in-the-loop approvals, signed
+      action receipts, anomaly status, sampling-attack evaluation, the
+      security-event feed, and the MCP wire-protocol termination endpoint —
+      is being documented in an upcoming pass of this reference.
   - name: Observability
     description: Usage analytics, request logs, latency percentiles, and feedback
   - name: System
@@ -250,13 +279,13 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '422':
-          description: Sovereign routing refusal — the request carries regulated personal data and no jurisdiction-resident provider is eligible.
+          description: Sovereign routing refusal (`routeplane_sovereign_block`) — the request carries regulated personal data and no jurisdiction-resident provider is eligible.
           headers:
             x-routeplane-pii-masked:
               $ref: '#/components/headers/XPiiMasked'
           content:
-            text/plain:
-              schema: { type: string }
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '429':
           description: Rate limit exceeded (`rate_limit_exceeded` / `routeplane_rate_limit_exceeded`) with truthful `x-ratelimit-*` + `Retry-After` headers.
           headers:
@@ -346,10 +375,10 @@ paths:
               schema: { $ref: '#/components/schemas/AnthropicError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '422':
-          description: Sovereign routing refusal on the translated content (pipeline decision — Routeplane envelope, not Anthropic-shaped).
+          description: Sovereign routing refusal on the translated content (`routeplane_sovereign_block` — the Routeplane envelope, not Anthropic-shaped).
           content:
-            text/plain:
-              schema: { type: string }
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '429':
           description: Rate limited (pipeline decision — OpenAI-shaped envelope).
           content:
@@ -395,7 +424,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '402': { description: Budget exhausted., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
         '422':
-          description: Sovereign refusal (text), or `embeddings_not_supported` (JSON envelope) when every attempted provider lacks first-party embeddings.
+          description: Sovereign refusal (`routeplane_sovereign_block`), or `embeddings_not_supported` when every attempted provider lacks first-party embeddings.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
@@ -772,18 +801,35 @@ paths:
       tags: [Observability]
       operationId: submitFeedback
       x-routeplane-edition: community
-      summary: Attach a quality score to a request trace
+      summary: Attach a quality score to a request trace or an episode
       description: |
-        Attach a weighted quality score to a prior request (Portkey-compatible
-        contract). `trace_id` is the `x-routeplane-trace-id` header the
-        gateway emits on completions. Feedback is a gateway-control signal —
-        it never flows to a provider; it is recorded off the hot path into the
-        in-memory observability ring. The gateway validates shape (it does not
-        verify the trace still exists in the ring). Caller `metadata` is
-        bounded (at most 16 keys; keys and string values at most 256
-        characters; flat scalars only) — oversized metadata is rejected with
-        400, never silently truncated, and metadata values are not persisted
-        raw.
+        Attach a weighted quality score to exactly **one target** — an
+        inference (`trace_id`, the `x-routeplane-trace-id` the gateway emits
+        on completions, or its alias `inference_id`) or an `episode_id`
+        grouping several related inferences. Supplying more than one target
+        (or none) is rejected: attribution is never guessed.
+
+        Two value modes:
+
+        * **Legacy (no `metric_name`)** — the Portkey-compatible contract:
+          `value` is an **integer** in `-10..=10` against an inference-level
+          target.
+        * **Named metric** — `metric_name` references a metric the operator
+          declared for your tenant, and the value must match the metric's
+          declared `type` (`boolean` → true/false; `float` → any finite
+          number; `comment` / `demonstration` → non-empty bounded text). The
+          target must match the metric's declared `level` (`inference` or
+          `episode`). Text values are **validated and dropped** — feedback
+          is recorded content-free; comment/demonstration text is never
+          retained by the gateway.
+
+        Feedback is a gateway-control signal — it never flows to a provider;
+        it is recorded off the hot path (the gateway validates shape; it does
+        not verify the trace still exists). `weight` (default `1.0`) must be
+        within `0.0..=1.0`. Caller `metadata` is bounded (at most 16 keys;
+        keys and string values at most 256 characters; flat scalars only) —
+        oversized metadata is rejected with 400, never silently truncated,
+        and only a count of accepted keys is retained.
       requestBody:
         required: true
         content:
@@ -791,16 +837,29 @@ paths:
             schema: { $ref: '#/components/schemas/FeedbackRequest' }
       responses:
         '200':
-          description: Recorded.
+          description: Recorded. The ack echoes the target key you supplied (`trace_id`, `inference_id`, or `episode_id`).
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   status: { type: string, example: recorded }
-                  trace_id: { type: string }
+                  trace_id: { type: string, description: Present when the target was `trace_id`. }
+                  inference_id: { type: string, description: Present when the target was `inference_id`. }
+                  episode_id: { type: string, description: Present when the target was `episode_id`. }
         '400':
-          description: Validation failure (empty/oversized `trace_id`, `value` outside -10..=10, `weight` outside 0.0..=1.0, unbounded/non-object `metadata`).
+          description: |
+            Validation failure. Generic shape errors (missing/ambiguous
+            target, `value` outside `-10..=10` on the legacy path, `weight`
+            outside `0.0..=1.0`, unbounded/non-object `metadata`) use
+            `invalid_request_error`; metric-mode failures carry branchable
+            codes — `routeplane_feedback_metric_name_required` (an
+            `episode_id` needs a metric whose level is `episode`),
+            `routeplane_feedback_metric_name_invalid`,
+            `routeplane_feedback_metric_unknown` (not declared for this
+            tenant — indistinguishable from another tenant's),
+            `routeplane_feedback_metric_level_mismatch`, and
+            `routeplane_feedback_metric_value_mismatch`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
@@ -904,7 +963,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/PromptForbidden' }
         '404': { $ref: '#/components/responses/PromptNotFound' }
-        '422': { description: Sovereign routing refusal on the rendered text., content: { text/plain: { schema: { type: string } } } }
+        '422': { description: Sovereign routing refusal on the rendered text (`routeplane_sovereign_block`)., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
         '429': { description: Rate limited., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
 
   /v1/mcp/tool-result/inspect:
@@ -951,10 +1010,23 @@ paths:
           color: '#8B5CF6'
       summary: Authorize an agent's MCP tool call (default-deny)
       description: |
-        Default-deny authorization: an unknown agent is refused; a known agent
-        is allowed only if its grants cover `(server, tool)` and every argument
-        URL clears the SSRF egress guard. Gated by the agentic-security
-        entitlement (Enterprise; **404** when not entitled).
+        Default-deny authorization. An unknown agent is refused; a known agent
+        is allowed only if **(a)** the target server's pinned tool manifest is
+        un-drifted — a pinned server must present a matching `server_manifest`,
+        and drift quarantines the server fail-closed — **(b)** its grants cover
+        the exact `(server, tool)` pair (a grant for one server never
+        authorizes the same tool name on another), and **(c)** every URL the
+        call would reach clears the SSRF egress guard: the flat
+        `argument_urls` **and** URLs found by recursively walking the full
+        `arguments` JSON, including the resolve-then-pin check that denies a
+        domain fronting an internal/metadata IP.
+
+        When the presented gateway key is bound to an agent identity, the
+        acting agent is taken from the **key**, never the body: `agent_id` may
+        be omitted, and a body value that disagrees with the binding is denied.
+        Per-agent tool-call quotas answer a 429 with a `Retry-After` header
+        and the quota envelope. Gated by the agentic-security entitlement
+        (Enterprise; **404** when not entitled).
       requestBody:
         required: true
         content:
@@ -969,10 +1041,19 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: The tenant lacks the agentic-security entitlement. }
         '422':
-          description: Denied — unknown agent, grant miss, or an SSRF-blocked argument URL; `reason` explains.
+          description: Denied — unknown agent, agent/key binding mismatch, manifest drift (server quarantined), grant miss, or an SSRF-blocked URL; `reason` explains (secret-free).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/McpVerdict' }
+        '429':
+          description: The agent's per-window tool-call quota is exhausted — back off for `Retry-After`.
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds until the agent's window rolls.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/McpQuotaDeny' }
 
   /v1/mcp/run/step:
     post:
@@ -1037,6 +1118,165 @@ paths:
                     items: { $ref: '#/components/schemas/RequestLogRow' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /v1/evaluations:
+    get:
+      tags: [Observability]
+      operationId: listEvaluations
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: LLM-as-judge evaluation scores (durable, content-free)
+      description: |
+        The tenant's stored judge/eval scores per rubric and judge variant,
+        read from the durable telemetry plane. Every row is **content-free by
+        construction**: identifiers, closed-vocabulary labels, a verdict, and
+        a graded score — never the judged text or a judge rationale (which the
+        gateway discards before persistence). Rows are newest-first; the
+        `summary` block is folded from the **returned** rows, so a capped
+        response summarizes the newest slice, not the whole window. Note that
+        a pass rate is not a calibration statement — judge-vs-human agreement
+        is measured separately, per (judge variant, rubric) pair.
+
+        The inclusive `from`/`to` day window defaults to the last 14 UTC days
+        and is **clamped to 31** (this surface scans per-request events, so
+        its window is tighter than the 92-day rollup read at
+        `/v1/finops/usage/daily`); an oversized window is clamped by dropping
+        the oldest days, never errored. Requires the **evaluations** and
+        **durable-telemetry** entitlements (Enterprise); reads are capped
+        per tenant (default 30/min).
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date, example: "2026-07-01" }
+          description: Inclusive window start (`YYYY-MM-DD`, UTC). Default = 13 days before `to`.
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date, example: "2026-07-14" }
+          description: Inclusive window end (`YYYY-MM-DD`, UTC). Default = today; future dates are clamped to today.
+        - name: rubric
+          in: query
+          required: false
+          schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,31}$", example: answer_grounded }
+          description: Filter to one rubric (closed-vocabulary label — `[a-z0-9_]`, max 32 — else 400 `routeplane_invalid_filter`).
+        - name: judge_variant
+          in: query
+          required: false
+          schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,31}$", example: faithfulness_judge_v1 }
+          description: Filter to one judge variant (same closed-vocabulary rule).
+        - name: passed
+          in: query
+          required: false
+          schema: { type: boolean }
+          description: Filter to passing (`true`) or failing (`false`) verdicts.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 5000, default: 1000 }
+          description: Row cap, newest-first (clamped server-side to `1..=5000`).
+      responses:
+        '200':
+          description: The window's scores plus the fold over the returned rows.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvaluationsReport' }
+        '400':
+          description: '`invalid_date` (dates must be `YYYY-MM-DD`), `invalid_range` (`from` after `to`), `routeplane_invalid_filter` (non-label filter value), or `unsupported_tenant_id` (this tenant id cannot be read durably — permanent, do not retry).'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: '`feature_not_entitled` / `feature_not_released` — the evaluations or durable-telemetry entitlement is missing or held back.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429':
+          description: '`read_rate_limited` (`type: rate_limit_error`) — the per-tenant read cap; retry after `Retry-After`.'
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds until the window resets.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '503':
+          description: '`telemetry_store_unavailable` — the durable telemetry plane is not armed on this deployment (or briefly unreadable).'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /v1/finops/usage/daily:
+    get:
+      tags: [Observability]
+      operationId: getDailyUsage
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Durable per-day usage & cost rollups
+      description: |
+        The tenant's per-day usage and cost history, folded server-side from
+        durable hourly rollups — the one FinOps read backed by durable
+        history rather than the recent in-memory window, and the shape the
+        Console's usage views consume. Only days with recorded events appear
+        (never fabricated zeros); latency percentiles are interpolated from
+        fixed log-spaced buckets (error ≈ one bucket width); cost figures are
+        the gateway's canonical integer micro-USD estimates from its price
+        book (an INR paise view where attributed) — recorded estimates, not
+        provider invoices. The response `note` restates all of this.
+
+        The inclusive `from`/`to` day window defaults to the last 14 UTC days
+        and is clamped to **92**; oversized windows are clamped by dropping
+        the oldest days, never errored. Requires the **FinOps export** and
+        **durable-telemetry** entitlements (Enterprise); reads are capped per
+        tenant (default 30/min). Tenant isolation is structural — the store
+        partitions by the authenticated tenant.
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date, example: "2026-07-01" }
+          description: Inclusive window start (`YYYY-MM-DD`, UTC). Default = 13 days before `to`.
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date, example: "2026-07-14" }
+          description: Inclusive window end (`YYYY-MM-DD`, UTC). Default = today; future dates are clamped to today.
+      responses:
+        '200':
+          description: Per-day rollups plus window totals.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DailyUsageReport' }
+        '400':
+          description: '`invalid_date`, `invalid_range`, or `unsupported_tenant_id` (permanent — do not retry).'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: '`feature_not_entitled` / `feature_not_released` — the FinOps-export or durable-telemetry entitlement is missing or held back.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429':
+          description: '`read_rate_limited` (`type: rate_limit_error`) — the per-tenant read cap; retry after `Retry-After`.'
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds until the window resets.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '503':
+          description: '`telemetry_store_unavailable` — the durable telemetry plane is not armed on this deployment.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
   /analytics:
     get:
       tags: [Observability]
@@ -1065,12 +1305,14 @@ paths:
       tags: [Observability]
       operationId: getLatencyStats
       x-routeplane-edition: community
-      summary: Latency percentiles (overall + per provider)
+      summary: Latency percentiles (your traffic only)
       description: |
         Exact nearest-rank latency percentiles (p50/p95/p99/max, milliseconds)
         over the timed provider attempts in the in-memory ring — overall and
-        per provider. Percentile fields are omitted when there are no samples
-        (never a misleading zero). Aggregates only — no per-tenant rows.
+        per provider — **scoped to the authenticated tenant's own traffic**
+        (the scope comes from your key, server-side; no client-supplied
+        identifier selects it). Percentile fields are omitted when there are
+        no samples (never a misleading zero).
       responses:
         '200':
           description: The latency report.
@@ -1133,12 +1375,19 @@ paths:
       tags: [System]
       operationId: metrics
       x-routeplane-edition: community
-      summary: Prometheus metrics (no auth)
-      security: []
+      summary: Prometheus metrics (gateway key required by default)
       description: |
         SRE metrics in the **Prometheus text exposition format**
-        (`Content-Type: text/plain; version=0.0.4`) — not JSON. Metric
-        families (all lock-free atomic counters, reset on process restart):
+        (`Content-Type: text/plain; version=0.0.4`) — not JSON.
+
+        **Authentication:** unlike `/healthz` and `/status`, this endpoint
+        requires a gateway key **by default** (missing/invalid key ⇒ 401) —
+        a public scrape target invites cardinality probing on an
+        internet-facing deployment. Self-hosts whose ingress is private can
+        restore the classic unauthenticated scrape with
+        `RP_METRICS_PUBLIC=on`; point your Prometheus scrape config's
+        authorization at the key either way. Metric families (all lock-free
+        atomic counters, reset on process restart):
 
         * `rp_requests_total{provider, outcome}` — requests by provider and
           outcome (`success`, `error`, `residency_blocked`,
@@ -1156,7 +1405,8 @@ paths:
 
         Label cardinality is bounded (the `provider` label collapses unknown
         values to `other`); labels never carry tenant, key, model, or content
-        — which is what makes the endpoint safe to serve unauthenticated.
+        — which is what makes the `RP_METRICS_PUBLIC=on` opt-out safe on a
+        private ingress.
       responses:
         '200':
           description: Prometheus text exposition.
@@ -1171,6 +1421,7 @@ paths:
                   rp_shed_total 0
                   # TYPE shed_total counter
                   shed_total 0
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
 components:
   securitySchemes:
@@ -1894,17 +2145,40 @@ components:
       description: 'The default (`json`) contract is `{"text": "…"}`. Richer formats (`verbose_json`) add provider fields (`language`, `duration`, `segments`, `words`, …), passed through verbatim.'
     FeedbackRequest:
       type: object
-      required: [trace_id, value]
+      required: [value]
+      description: Exactly one of `trace_id` / `inference_id` / `episode_id` must be present.
       properties:
         trace_id:
           type: string
           maxLength: 256
-          description: The `x-routeplane-trace-id` of the request this feedback refers to.
+          description: Inference-level target — the `x-routeplane-trace-id` of the request this feedback refers to.
+        inference_id:
+          type: string
+          maxLength: 256
+          description: Inference-level alias of `trace_id`. Supplying both is rejected as ambiguous.
+        episode_id:
+          type: string
+          maxLength: 256
+          description: Episode-level target — a group of related inferences. Requires a `metric_name` whose declared level is `episode`.
+        metric_name:
+          type: string
+          maxLength: 128
+          pattern: "^[a-zA-Z0-9._-]{1,128}$"
+          description: |
+            Optional named metric declared by your operator. Absent ⇒ the
+            legacy integer path. Present ⇒ `value` must match the metric's
+            declared `type` and the target its declared `level`.
         value:
-          type: integer
-          minimum: -10
-          maximum: 10
-          description: Weighted quality score.
+          description: |
+            The reported value. Legacy path (no `metric_name`): an integer in
+            `-10..=10`. Named metric: `boolean` → true/false; `float` → any
+            finite number; `comment`/`demonstration` → non-empty bounded text
+            (validated, then dropped — never retained).
+          oneOf:
+            - type: integer
+            - type: number
+            - type: boolean
+            - type: string
         weight:
           type: number
           minimum: 0.0
@@ -2087,15 +2361,40 @@ components:
           description: The tool-result content to inspect before it re-enters the model context.
     McpAuthorizeRequest:
       type: object
-      required: [agent_id, server, tool]
+      required: [server, tool]
       properties:
-        agent_id: { type: string, description: The acting agent, resolved against the configured agent registry. }
+        agent_id:
+          type: string
+          description: |
+            The acting agent, resolved against the configured agent registry.
+            When the gateway key carries an agent binding this may be omitted
+            (the binding supplies it) and a disagreeing value is denied — the
+            key, never the body, decides who is acting.
         server: { type: string, description: The MCP server the tool call targets. }
         tool: { type: string, description: The tool being invoked. }
         argument_urls:
           type: array
           items: { type: string }
           description: URLs the tool call would reach — each checked against the SSRF egress guard.
+        arguments:
+          description: |
+            The full tool-call arguments JSON. Recursively walked for URLs
+            hidden in nested objects/arrays, so a buried metadata/internal URL
+            is SSRF-checked too — not just the flat `argument_urls`.
+          type: object
+          additionalProperties: true
+        server_manifest:
+          type: string
+          description: |
+            The canonical tool manifest the caller observed for `server`.
+            **Required when the server is pinned**: the gateway re-hashes it
+            and quarantines the server on drift. Omit for unpinned servers.
+        run_id:
+          type: string
+          description: |
+            Optional run correlation: when present, this authorization is also
+            recorded as a `tool_call` step on that run's call graph. Additive —
+            it never affects the decision.
     McpRunStepRequest:
       type: object
       required: [agent_id, run_id]
@@ -2107,10 +2406,163 @@ components:
       type: object
       properties:
         outcome: { type: string, enum: [allow, deny] }
-        reason: { type: string, description: Why it was denied (secret-free, structured) — present only on deny. }
+        reason:
+          type: string
+          description: Why it was denied (secret-free, structured) — present only on deny.
+    McpQuotaDeny:
+      type: object
+      description: The 429 quota envelope — the agentic analog of the per-key rate-limit 429, carrying what the agent runtime needs to back off.
+      properties:
+        outcome: { type: string, enum: [deny] }
+        reason: { type: string, enum: [quota_exceeded] }
+        retry_after_ms: { type: integer, description: Milliseconds until the agent's window rolls. }
+        limit: { type: integer, description: The configured per-window ceiling. }
+        window_ms: { type: integer, description: The configured window length in milliseconds. }
     McpRunStepResponse:
       type: object
       properties:
         decision: { type: string, enum: [continue, stop] }
         reason: { type: string, description: Why the run was stopped (loop ceiling / budget / killed) — present only on stop. }
         iterations: { type: integer, description: Iterations consumed by the run so far. }
+    EvalScoreRow:
+      type: object
+      description: One judged inference — identifiers, labels, and numbers only; never the judged text.
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: When the score was recorded (RFC 3339, UTC). Rows are newest-first.
+        region:
+          type: [string, "null"]
+          example: in
+          description: The judge run's region, when the score carried one.
+        rubric:
+          type: string
+          example: answer_grounded
+          description: The rubric/criterion scored (closed-vocabulary label).
+        judge_variant:
+          type: string
+          example: faithfulness_judge_v1
+          description: Which judge variant produced the score — judges are versioned, and calibration is per (judge variant, rubric) pair.
+        passed: { type: boolean, description: Whether the rubric passed. }
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: The graded score between 0.0 and 1.0.
+        inference_id:
+          type: string
+          example: inf_9f2c1a7bd0e14bd2a3f8c14be9d3a001
+          description: Which stored inference was judged — an identifier, not content.
+    EvalRubricSummary:
+      type: object
+      properties:
+        rubric: { type: string }
+        judge_variant: { type: string }
+        n:
+          type: integer
+          description: Scores for this (rubric, judge variant) pair among the returned rows.
+        n_passed: { type: integer }
+        mean_score:
+          type: number
+          description: Mean graded score, rounded to 4 decimal places.
+    EvaluationsReport:
+      type: object
+      properties:
+        tenant_id: { type: string }
+        from: { type: string, format: date, description: The effective (post-clamp) window start. }
+        to: { type: string, format: date }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/EvalScoreRow' }
+        summary:
+          type: object
+          description: Folded from the RETURNED rows — a capped response summarizes the newest slice, not the whole window.
+          properties:
+            n: { type: integer }
+            n_passed: { type: integer }
+            pass_rate: { type: number, description: '`n_passed / n`, rounded to 4 decimal places; `0.0` when there are no rows.' }
+            by_rubric:
+              type: array
+              items: { $ref: '#/components/schemas/EvalRubricSummary' }
+        note:
+          type: string
+          description: The gateway's honesty note — window, caps, and what the summary covers.
+        truncated:
+          type: boolean
+          description: 'Forthcoming (absent today): `true` when the row cap truncated the window. Clients should tolerate its presence.'
+    DailyUsageDay:
+      type: object
+      description: One UTC day's rollup. Only days with recorded events appear.
+      properties:
+        date: { type: string, format: date }
+        requests: { type: integer }
+        errors: { type: integer }
+        streaming: { type: integer, description: Requests served as SSE streams. }
+        sovereign_routed: { type: integer, description: Requests routed under a residency lock. }
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        total_tokens: { type: integer }
+        cost_micro_usd: { type: integer, description: Canonical integer micro-USD estimate (gateway price book — not a provider invoice). }
+        input_cost_micro_usd: { type: integer, description: May sum (with output) to less than `cost_micro_usd` when a request's cost was attributed outside the standard estimator — the split is then honestly omitted per event. }
+        output_cost_micro_usd: { type: integer }
+        cost_inr_paise: { type: integer, description: INR paise view, where attributed. }
+        latency_ms:
+          type: object
+          properties:
+            p50: { type: [number, "null"] }
+            p95: { type: [number, "null"] }
+            p99: { type: [number, "null"] }
+          description: Interpolated from fixed log-spaced buckets (error ≈ one bucket width); null with no samples.
+        by_model:
+          type: array
+          items:
+            type: object
+            properties:
+              provider: { type: string }
+              model: { type: string }
+              requests: { type: integer }
+              errors: { type: integer }
+              total_tokens: { type: integer }
+              cost_micro_usd: { type: integer }
+        by_key:
+          type: array
+          description: Full-grain (key, provider, model) rows, so a client can re-fold per model within one key's traffic.
+          items:
+            type: object
+            properties:
+              key: { type: string, description: The virtual key's name. }
+              provider: { type: string }
+              model: { type: string }
+              requests: { type: integer }
+              errors: { type: integer }
+              prompt_tokens: { type: integer }
+              completion_tokens: { type: integer }
+              total_tokens: { type: integer }
+              cost_micro_usd: { type: integer }
+              cost_inr_paise: { type: integer }
+    DailyUsageReport:
+      type: object
+      properties:
+        tenant_id: { type: string }
+        from: { type: string, format: date, description: The effective (post-clamp) window start. }
+        to: { type: string, format: date }
+        days:
+          type: array
+          items: { $ref: '#/components/schemas/DailyUsageDay' }
+        totals:
+          type: object
+          description: Window totals across all returned days.
+          properties:
+            requests: { type: integer }
+            errors: { type: integer }
+            prompt_tokens: { type: integer }
+            completion_tokens: { type: integer }
+            total_tokens: { type: integer }
+            cost_micro_usd: { type: integer }
+            input_cost_micro_usd: { type: integer }
+            output_cost_micro_usd: { type: integer }
+            cost_inr_paise: { type: integer }
+        note:
+          type: string
+          description: The gateway's honesty note — provenance, estimator caveats, and window semantics.

@@ -11,9 +11,12 @@ open-source, OpenAI-compatible AI gateway. Maintained by the Routeplane team.
   [docs.routeplane.ai/community.html](https://docs.routeplane.ai/community.html)
 
 The source of truth is [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1), rendered
-with a pinned, integrity-checked Redoc bundle via GitHub Pages. There is no
-build step: `community.html` filters the same spec client-side by the
-`x-routeplane-edition` markers, so the two views can never drift apart.
+with a pinned, integrity-checked Redoc bundle via GitHub Pages. The
+[Community Edition view](community.html) renders the pre-generated
+[`openapi.ce.yaml`](openapi.ce.yaml) — the same spec with the operations
+marked `x-routeplane-edition: enterprise` (and the Prompts / Agentic-security
+tags) removed. Regenerate it from `openapi.yaml` whenever the spec changes, so
+the two views cannot drift.
 
 ## Versioning
 
