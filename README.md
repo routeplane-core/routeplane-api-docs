@@ -15,6 +15,12 @@ with a pinned, integrity-checked Redoc bundle via GitHub Pages. There is no
 build step: `community.html` filters the same spec client-side by the
 `x-routeplane-edition` markers, so the two views can never drift apart.
 
+**AI agents / LLMs:** see [`llms.txt`](llms.txt) for a machine-readable API
+overview (auth, base URLs, endpoints, headers, SDKs, examples), and
+[`llms-full.txt`](llms-full.txt) for the long-form per-endpoint reference —
+both published at [docs.routeplane.ai/llms.txt](https://docs.routeplane.ai/llms.txt)
+and [/llms-full.txt](https://docs.routeplane.ai/llms-full.txt).
+
 ## Versioning
 
 `info.version` in `openapi.yaml` states the gateway release the spec was

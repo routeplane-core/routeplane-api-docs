@@ -1,0 +1,152 @@
+# Routeplane AI Gateway
+
+> Routeplane is a neutral, multi-provider **AI Gateway** — an SRE-grade, OpenAI-compatible proxy in one Rust binary, in front of 15 LLM providers. Point any OpenAI (or Anthropic) SDK at it: only the base URL and the key change. It adds declarative routing with fallback/retry/hedging, per-provider circuit breaking, guardrails and PII masking, budgets & rate limits, response caching, and an enterprise upgrade path (sovereign data-residency routing, a tamper-evident audit ledger, and an agentic-security MCP gateway).
+
+This file is a machine-readable overview for AI agents and LLMs. The authoritative contract is the OpenAPI 3.1 spec (`openapi.yaml` in this repo), rendered at https://docs.routeplane.ai. A longer companion, `llms-full.txt`, includes the per-endpoint request/response reference.
+
+## Authentication
+
+Present a Routeplane virtual key (always `rp_`-prefixed). Two equivalent forms:
+
+- `Authorization: Bearer rp_...` — the SDK-compatibility form. This is what every stock OpenAI SDK sends, so pointing an OpenAI SDK at Routeplane needs only a `base_url` change plus your virtual key as the API key.
+- `x-routeplane-api-key: rp_...` — the branded primary header.
+
+Both resolve through the same constant-time lookup. A non-`rp_` Bearer value (e.g. a provider key like `sk-...`) is **never** accepted and never forwarded — provider credentials are resolved server-side from the virtual key. Missing/invalid credentials return `401` with the OpenAI error envelope (`code: invalid_api_key`).
+
+## Base URLs
+
+- **Cloud**: `https://api.routeplane.ai` — OpenAI-compatible routes live under `/v1` (e.g. `https://api.routeplane.ai/v1/chat/completions`).
+- **Self-hosted**: `https://<your-gateway-host>` — same paths; the open-source gateway is a single Rust binary you run yourself.
+
+## Providers
+
+15 provider integrations, selected (or chained) via `x-routeplane-provider`: OpenAI, Anthropic, Google Gemini, Azure OpenAI, Mistral, Cohere, Amazon Bedrock, Groq, DeepSeek, Together AI, Fireworks AI, xAI (Grok), OpenRouter, a generic OpenAI-compatible `self_hosted` adapter (vLLM / Ollama / LocalAI), plus a built-in `local` moderation source. A comma-separated value like `openai,anthropic` is a fallback chain.
+
+## Core endpoints
+
+OpenAI-compatible inference (Community, open source):
+
+- `POST /v1/chat/completions` — chat completions, buffered or streaming (SSE), with tool calling and multimodal parts. The `model` field may name an operator-defined **combo** (a saved routing chain).
+- `POST /v1/messages` — native Anthropic Messages surface (same pipeline; streaming not supported here — use chat/completions).
+- `POST /v1/embeddings` — OpenAI-compatible embeddings.
+- `GET /v1/models`, `GET /v1/models/{id}` — model discovery (curated catalog + combos; combos have `owned_by: "routeplane"`).
+- `POST /v1/moderations` — content moderation (incl. in-process `local` source).
+- `POST /v1/rerank` — Cohere/LiteLLM-compatible reranking (RAG).
+- `POST /v1/images/generations` — image generation.
+- `POST /v1/audio/speech` — text-to-speech (binary audio out).
+- `POST /v1/audio/transcriptions` — speech-to-text (multipart upload).
+- `POST /v1/audio/translations` — audio → English text (multipart upload).
+- `POST /v1/responses` — intentionally unsupported; returns a typed `501` pointing to chat/completions.
+
+Observability & system (Community):
+
+- `POST /v1/feedback` — attach a quality score to a request trace (by `x-routeplane-trace-id`).
+- `GET /v1/logs` — recent request logs, scoped to your own keys.
+- `GET /analytics`, `GET /analytics/latency` — recent usage events + latency percentiles.
+- `GET /status` — operational snapshot (no auth).
+- `GET /metrics` — Prometheus text exposition (no auth).
+- `GET /healthz` — liveness probe (no auth).
+
+Enterprise (commercial):
+
+- `GET /v1/prompts/{ref}` (+ `/render`, `/completions`) — versioned prompt registry.
+- `POST /v1/mcp/tool-result/inspect` — agentic security: inspect a tool result before it re-enters the model context.
+- `POST /v1/mcp/tool-call/authorize` — agentic security: default-deny tool-call authorization.
+- `POST /v1/mcp/run/step` — agentic security: account one agent-run iteration against its breakers.
+
+## Request headers (all `x-routeplane-*`)
+
+- `x-routeplane-api-key` — virtual key (`rp_`-prefixed). See Authentication.
+- `x-routeplane-provider` — provider or comma-separated fallback chain (route-specific default). Overridden by sovereign routing when regulated data + a residency jurisdiction apply.
+- `x-routeplane-strategy` — candidate ordering: `priority` (default) | `weighted` | `cost` | `latency`.
+- `x-routeplane-residency` — requested data-residency jurisdiction (e.g. `IN`); enforced as a hard region lock only when the request also carries regulated personal data.
+- `x-routeplane-config` — routing/guardrails JSON envelope, or a saved-config reference `cfg_<id>` (Enterprise; named combos are the Community path to saved chains).
+- `x-routeplane-metadata` — JSON object of scalars addressable from routing conditions as `metadata.<key>`.
+- `x-routeplane-use-case` — business-process label for cost attribution in the FinOps reads.
+- `x-routeplane-currency` — display currency for cost annotations (e.g. `INR`); canonical accounting stays micro-USD.
+- `x-routeplane-timeout-ms` — per-request deadline override (narrow-only; MIN-folded with the server deadline).
+- `x-routeplane-pii-mode` — `tokenize` requests reversible tokenization instead of irreversible masking (Enterprise; degrades loudly).
+- `x-routeplane-output-mask` — opt-in output-masking annotation (baseline response masking runs regardless).
+- `x-routeplane-cache-control` — `no-store` bypasses the response cache for this request.
+- `x-routeplane-idempotency-key` — idempotency key for safe retries (standard `Idempotency-Key` also accepted).
+- `x-routeplane-cohort` — explicit A/B cohort key for prompt-variant selection.
+
+Useful response headers include `x-routeplane-provider` (which provider served it), `x-routeplane-trace-id` (correlation id for `POST /v1/feedback`), and `x-routeplane-cache` (`hit`/`miss`/`bypass`/`semantic-hit`).
+
+## Errors
+
+All `4xx`/`5xx` bodies use the OpenAI error envelope, extended with Routeplane-branded codes (`routeplane_rate_limit_exceeded`, `routeplane_budget_exceeded`, `endpoint_not_supported`, ...). Notable statuses: `401` invalid key, `402` budget exhausted, `422` sovereign routing refusal (no jurisdiction-resident provider), `429` rate limited, `446` guardrails denied (per-check results under `x_routeplane.check_results`), `503` capacity shed. Assert on `error.code`, not the bare status.
+
+## SDKs & tooling
+
+- **Python** — `pip install routeplane` → `from routeplane import Routeplane` (also `AsyncRouteplane`, and a `headers()` helper for use with the stock OpenAI/LangChain/LlamaIndex/CrewAI SDKs). https://pypi.org/project/routeplane
+- **TypeScript / JavaScript** — `npm i @routeplane/sdk` → `import { Routeplane } from '@routeplane/sdk'` (a typed core client lives at `@routeplane/sdk/core`, with a `createHeaders()` helper for the OpenAI / Vercel AI SDKs). https://www.npmjs.com/package/@routeplane/sdk
+- **CLI** — `npm i -g @routeplane/cli` (installs the `rp` binary) or `npx @routeplane/cli status`. https://www.npmjs.com/package/@routeplane/cli
+- **MCP Server** — `npx -y @routeplane/mcp-server` (env `ROUTEPLANE_API_KEY`, `ROUTEPLANE_BASE_URL`) exposes the gateway to MCP-capable agents. https://www.npmjs.com/package/@routeplane/mcp-server
+
+## Quick examples
+
+Python (native SDK):
+
+```python
+from routeplane import Routeplane
+
+client = Routeplane(
+    api_key="rp_your_gateway_key",
+    provider="openai,anthropic",   # fallback chain
+    strategy="cost",               # cheapest eligible provider first
+    residency="IN",                # keep Indian PII in-region
+    use_case="support-bot",        # FinOps cost attribution
+)
+
+resp = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(resp.choices[0].message.content)
+```
+
+Python (any OpenAI SDK — only base_url + key change):
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="rp_your_gateway_key",
+    base_url="https://api.routeplane.ai/v1",
+    default_headers={"x-routeplane-api-key": "rp_your_gateway_key"},
+)
+resp = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+```
+
+curl:
+
+```bash
+curl https://api.routeplane.ai/v1/chat/completions \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer rp_your_gateway_key" \
+  -H "x-routeplane-provider: openai,anthropic" \
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+## Docs
+
+- [OpenAPI reference (full)](https://docs.routeplane.ai): rendered API reference — Community + Enterprise, badged.
+- [Community Edition view](https://docs.routeplane.ai/community.html): only what ships in the open-source gateway.
+- [OpenAPI 3.1 spec](https://github.com/routeplane-core/routeplane-api-docs/blob/main/openapi.yaml): the source-of-truth contract.
+- [llms-full.txt](https://docs.routeplane.ai/llms-full.txt): the longer machine-readable reference with per-endpoint schemas.
+- [Website](https://routeplane.ai): product overview.
+- [GitHub org](https://github.com/routeplane-core): all Routeplane repositories.
+- [Community Edition (source)](https://github.com/routeplane-core/routeplane-ce): the open-source gateway (Apache-2.0).
+- [Python SDK (PyPI)](https://pypi.org/project/routeplane): `pip install routeplane`.
+- [TypeScript SDK (npm)](https://www.npmjs.com/package/@routeplane/sdk): `npm i @routeplane/sdk`.
+- [CLI (npm)](https://www.npmjs.com/package/@routeplane/cli): `npx @routeplane/cli`.
+- [MCP Server (npm)](https://www.npmjs.com/package/@routeplane/mcp-server): `npx @routeplane/mcp-server`.
+
+## Contact
+
+- General: maintainers@routeplane.ai
+- Security reports: security@routeplane.ai (do not open public issues for vulnerabilities)
