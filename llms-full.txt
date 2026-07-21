@@ -1,0 +1,286 @@
+# Routeplane AI Gateway — Full API Reference (for LLMs)
+
+> Routeplane is a neutral, multi-provider AI Gateway — an SRE-grade, OpenAI-compatible proxy in one Rust binary, in front of 15 LLM providers. This file is the long-form, machine-readable reference: every endpoint with its headers, request fields, response shape, and status codes. It is generated from the OpenAPI 3.1 contract (`openapi.yaml`, gateway release v0.1.32) rendered at https://docs.routeplane.ai. For a short overview see `llms.txt`.
+
+This document tracks the shipped surface. Community operations are open source (Apache-2.0); Enterprise operations are commercial and are absent from the Community Edition view (https://docs.routeplane.ai/community.html).
+
+---
+
+## Authentication
+
+Present a Routeplane virtual key (`rp_`-prefixed). Two equivalent forms, resolved through the same constant-time lookup:
+
+- `Authorization: Bearer rp_...` — SDK-compatibility form (what stock OpenAI SDKs send). Only `rp_`-prefixed gateway keys are accepted; a provider key such as `sk-...` in this header is rejected with `401` and never forwarded upstream.
+- `x-routeplane-api-key: rp_...` — branded primary header.
+
+Provider credentials are resolved server-side from the virtual key; clients never send provider keys. Missing/invalid credentials → `401` with the OpenAI error envelope (`code: invalid_api_key`). A suspended/closed tenant returns the same envelope (no existence/state leak).
+
+The unauthenticated routes are `GET /status`, `GET /metrics`, `GET /healthz`, and `GET /`.
+
+## Base URLs
+
+- **Cloud**: `https://api.routeplane.ai`. OpenAI-compatible routes are under `/v1`.
+- **Self-hosted**: `https://<your-gateway-host>` (the open-source gateway is a single Rust binary; same paths).
+
+## Providers
+
+15 integrations, selected via `x-routeplane-provider` (single value or comma-separated fallback chain): `openai`, `anthropic`, `gemini`, `azure_openai`, `mistral`, `cohere`, `bedrock`, `groq`, `deepseek`, `together`, `fireworks`, `xai`, `openrouter`, `self_hosted` (generic OpenAI-compatible: vLLM / Ollama / LocalAI), plus a built-in `local` moderation source.
+
+## OpenAI & Anthropic compatibility
+
+`POST /v1/chat/completions`, `POST /v1/embeddings`, `GET /v1/models`, and the moderation/image/audio routes are byte-compatible with the OpenAI wire shapes — point an OpenAI SDK's `base_url` at Routeplane and pass your virtual key. Streaming uses standard `text/event-stream` chunks terminated by `data: [DONE]`. `POST /v1/messages` additionally serves the native Anthropic Messages shape.
+
+## Named combos
+
+Operators can publish **combos** — saved routing chains addressable straight from the OpenAI `model` field (no headers, no config). Combos are listed by `GET /v1/models` with `owned_by: "routeplane"`; sending that id as `model` executes the chain. Combos are a Community feature.
+
+## Sovereign routing
+
+When a request carries regulated personal data (detected by the gateway's classifier) **and** a residency jurisdiction applies (`x-routeplane-residency` or the key's server-side default), routing is hard-locked to providers resident in that jurisdiction. No client header or routing config can widen the lock. If no resident provider is available the request is refused with `422`. The classifier ships in Community; jurisdiction-locked enforcement with the signed audit ledger is Enterprise.
+
+---
+
+## Request headers (`x-routeplane-*`)
+
+| Header | Values | Meaning |
+|---|---|---|
+| `x-routeplane-api-key` | `rp_...` | Virtual key (branded primary auth header). |
+| `x-routeplane-provider` | e.g. `openai,anthropic` | Provider or comma-separated fallback chain. Route-specific default. Overridden by sovereign routing. |
+| `x-routeplane-strategy` | `priority` (default), `weighted`, `cost`, `latency` | Candidate-ordering strategy. Superseded by a routing config. |
+| `x-routeplane-residency` | e.g. `IN` | Requested residency jurisdiction; hard region lock only when regulated data is present. Can narrow, never disable, the key default. |
+| `x-routeplane-config` | JSON envelope or `cfg_<id>` | `{"routing":{…},"guardrails":{…}}` (≤ 8 KiB) or a saved-config reference. Malformed/unknown sections → `400`. Enterprise. |
+| `x-routeplane-metadata` | JSON object (≤ 4 KiB) | Scalars addressable from routing conditions as `metadata.<key>`. |
+| `x-routeplane-use-case` | free-form label | Business-process label for cost attribution in analytics/FinOps. |
+| `x-routeplane-currency` | e.g. `INR` | Display currency for cost annotations; canonical accounting stays micro-USD. |
+| `x-routeplane-timeout-ms` | integer | Per-request deadline override (narrow-only; MIN-folded with server deadline). |
+| `x-routeplane-pii-mode` | `tokenize` | Reversible tokenization instead of irreversible masking (Enterprise; degrades loudly). |
+| `x-routeplane-output-mask` | `pii`,`secrets`,`all`,`true` | Opt-in output-mask annotation (baseline response masking runs regardless). |
+| `x-routeplane-cache-control` | `no-store` | Bypass the response cache for this request. |
+| `x-routeplane-idempotency-key` | string | Idempotency key for safe retries (`Idempotency-Key` also accepted, takes precedence). |
+| `x-routeplane-cohort` | string | Explicit A/B cohort key for prompt-variant selection. |
+
+## Response headers (selected)
+
+- `x-routeplane-provider` — the provider that served the response.
+- `x-routeplane-trace-id` (alias `x-routeplane-request-id`) — per-request correlation id (`req_<uuid>`); reference it in `POST /v1/feedback`.
+- `x-routeplane-cache` — cache verdict: `hit` | `miss` | `refreshed` | `semantic-hit` | `bypass`.
+- `x-routeplane-hedged` — present when a speculative hedge won.
+- `x-routeplane-idempotent-replayed: true` — response replayed from a recorded idempotent result.
+- `x-routeplane-pii-masked` — count of inbound parts the always-on ingress redact masked (present only when ≥ 1).
+- `x-ratelimit-remaining-requests` / `x-ratelimit-remaining-tokens` / `x-routeplane-budget-remaining` — advisory (limit-configured keys).
+- `x-routeplane-shed: capacity` — present on capacity-shed `503`s.
+
+## Error envelope & status codes
+
+All `4xx`/`5xx` JSON bodies use the OpenAI error envelope, extended:
+
+```json
+{ "error": { "message": "...", "type": "invalid_request_error", "param": null, "code": "routeplane_rate_limit_exceeded" },
+  "x_routeplane": { } }
+```
+
+Common statuses: `400` malformed config/metadata; `401` invalid/missing key; `402` budget exhausted (`Retry-After` + `x-routeplane-limit-*`); `403` model excluded by compliance policy; `422` sovereign refusal / capability-not-supported; `429` rate limited (truthful `x-ratelimit-*` + `Retry-After`); `446` guardrails denied (per-check results under `x_routeplane.check_results`, header `x-routeplane-guardrails: deny`); `500` all providers failed; `503` capacity shed. Assert on `error.code`, not the bare status.
+
+---
+
+# Endpoints
+
+## POST /v1/chat/completions — Create a chat completion (buffered or streaming) [Community]
+
+OpenAI-compatible chat completions across the configured provider chain, with fallback, config-driven retries, hedged requests, circuit breaking, PII masking, guardrails, budgets/rate limits, optional exact-match caching, and sovereign routing. Supports OpenAI tool calling (`tools` / `tool_choice` / `parallel_tool_calls`) and multimodal content parts (text + `image_url`). The `model` field may name an operator-defined combo.
+
+Headers: `x-routeplane-provider`, `-strategy`, `-residency`, `-config`, `-metadata`, `-use-case`, `-currency`, `-timeout-ms`, `-pii-mode`, `-output-mask`, `-cache-control`, `-idempotency-key`.
+
+Request body (`ChatCompletionRequest`), required `model` + `messages`:
+- `model` (string) — id or combo name.
+- `messages[]` — `{ role: system|user|assistant|tool, content: string | ContentPart[] | null, name?, tool_calls?, tool_call_id?, cache_control? }`. Content parts: `{type:"text",text}` or `{type:"image_url",image_url:{url,detail?}}` (url = HTTP(S) or base64 data URI).
+- `temperature`, `top_p`, `stream` (default false), `max_tokens`, `stop` (string or string[]), `n`, `presence_penalty`, `frequency_penalty`, `user`, `seed`, `logprobs`, `top_logprobs` (0–20), `logit_bias`, `service_tier`, `reasoning_effort` (low|medium|high).
+- `tools[]` — `{type:"function",function:{name,description?,parameters?}}`. `tool_choice` — string (`auto`/`none`/`required`) or object. `parallel_tool_calls` (bool). `response_format` — `{type:"json_object"}` or `{type:"json_schema",json_schema:{…}}`.
+
+Response `200` (`ChatCompletionResponse`): `{ id, object:"chat.completion", created, model, choices[]:{index,message,finish_reason,logprobs?}, usage:{prompt_tokens,completion_tokens,total_tokens,cached_tokens?,cache_creation_tokens?}, system_fingerprint?, service_tier? }`. With `stream:true` the response is `text/event-stream` of `ChatCompletionChunk` objects ending in `data: [DONE]`; tool-call `arguments` arrive as a JSON-encoded string.
+
+Statuses: `200`, `400`, `401`, `402`, `403`, `422`, `429`, `446`, `500`, `503`.
+
+## POST /v1/messages — Create a message (native Anthropic surface) [Community]
+
+The native Anthropic Messages shape over the same pipeline (residency, PII masking, guardrails, limits, routing, caching, accounting all apply). Provider chain defaults to `anthropic`; `x-routeplane-provider` overrides. **Streaming is not supported here**: `stream:true` → documented `400` (Anthropic error shape) directing to `POST /v1/chat/completions`. `max_tokens` is required.
+
+Headers: `x-routeplane-provider`, `-strategy`, `-residency`.
+
+Request (`AnthropicMessagesRequest`), required `model` + `max_tokens` + `messages`: `system` (string or block[]), `messages[]:{role:user|assistant, content: string | block[]}`, `temperature`, `top_p`, `stop_sequences[]`, `stream` (must be false/absent).
+
+Response `200` (`AnthropicMessagesResponse`): `{ id, type:"message", role:"assistant", model, content[]:{type,text}, stop_reason (end_turn|max_tokens|stop_sequence|tool_use), stop_sequence, usage:{input_tokens,output_tokens,cache_read_input_tokens?,cache_creation_input_tokens?} }`.
+
+Statuses: `200`; `400` (Anthropic error shape — missing `max_tokens` or `stream:true`); `401`; `422` (Routeplane envelope); `429`; `500`.
+
+## POST /v1/embeddings — Create embeddings [Community]
+
+OpenAI-compatible embeddings across providers with first-party embeddings (OpenAI, Azure OpenAI, Gemini, Mistral, Cohere, Together AI, Fireworks AI). Inputs are residency-classified and PII-masked (mask-then-embed). `encoding_format:"base64"` passes through verbatim. Non-streaming; never cached. A provider without embeddings (e.g. Anthropic) → `422 embeddings_not_supported`.
+
+Headers: `x-routeplane-provider`, `-strategy`, `-residency`.
+
+Request (`EmbeddingRequest`), required `model` + `input`: `input` (string or string[]), `encoding_format` (float|base64), `dimensions`, `user`.
+
+Response `200` (`EmbeddingResponse`): `{ object:"list", data[]:{object:"embedding",index,embedding: number[] | base64 string}, model, usage }`.
+
+Statuses: `200`, `401`, `402`, `422`, `429`, `500`.
+
+## GET /v1/models — List available models [Community]
+
+OpenAI-compatible catalog `{"object":"list","data":[…]}`: curated model ids per configured provider (each entry's `owned_by` is the `x-routeplane-provider` name to route to), environment-discovered deployments (`azure_openai`, `self_hosted`), and operator-defined combos (`owned_by:"routeplane"`). Entries may carry an additive `routeplane` extension (cost, modalities, capabilities, context window, compliance) that OpenAI SDKs ignore.
+
+Response `200` (`ModelList`). Statuses: `200`, `401`.
+
+## GET /v1/models/{id} — Retrieve one model [Community]
+
+The single OpenAI-shaped model object (base model or combo). Path `id` as returned by `GET /v1/models`. Statuses: `200`, `401`, `404` (`model_not_found`).
+
+## POST /v1/moderations — Classify content [Community]
+
+OpenAI-compatible moderation. Default provider `openai` (`omni-moderation-latest`); the sentinel `local` (alias `routeplane`) runs the built-in deterministic moderator in-process (no key, no network). **Deliberate deviation**: moderation sends RAW input (no PII masking) — a safety classifier must see raw content; the response carries only category labels/scores, never matched text. Residency eligibility still applies.
+
+Headers: `x-routeplane-provider`, `-strategy`, `-residency`.
+
+Request (`ModerationRequest`), required `input`: `input` (string or string[]), `model`. Response `200` (`ModerationResponse`): `{ id, model, results[]:{flagged, categories{key:bool}, category_scores{key:number}} }`. Statuses: `200`, `401`, `402`, `422`, `429`, `500`.
+
+## POST /v1/rerank — Rerank documents by relevance [Community]
+
+Cohere/LiteLLM-compatible reranking for RAG. Default provider `cohere` (OpenAI has no rerank). Query and every document are residency-classified then PII-masked. Non-streaming; never cached.
+
+Headers: `x-routeplane-provider`, `-strategy`, `-residency`.
+
+Request (`RerankRequest`), required `model` + `query` + `documents`: `documents` (non-empty string[]), `top_n`, `return_documents` (default false). Response `200` (`RerankResponse`): `{ id?, model, results[]:{index,relevance_score (0–1, desc),document?:{text}}, usage:{search_units,total_tokens} }`. Statuses: `200`, `401`, `402`, `422`, `429`, `500`.
+
+## POST /v1/images/generations — Generate images [Community]
+
+OpenAI-compatible image generation. Default provider `openai` (`gpt-image-1` / `dall-e-3`). Prompt is residency-classified then PII-masked. Unmodeled OpenAI fields (`style`, `background`, `user`, …) pass through verbatim.
+
+Headers: `x-routeplane-provider`, `-strategy`, `-residency`.
+
+Request (`ImageGenerationRequest`), required `prompt`: `model`, `n`, `size` (e.g. `1024x1024`), `quality`, `response_format` (url|b64_json). Response `200` (`ImageGenerationResponse`): `{ created, data[]:{url?,b64_json?,revised_prompt?}, usage? }`. Statuses: `200`, `401`, `402`, `422`, `429`, `500`.
+
+## POST /v1/audio/speech — Generate speech from text (TTS) [Community]
+
+OpenAI-compatible TTS. JSON request (`input` is text — PII-masked before egress); response is **binary audio** with `Content-Type` matching `response_format`. Default provider `openai` (`gpt-4o-mini-tts` / `tts-1`).
+
+Headers: `x-routeplane-provider`, `-strategy`, `-residency`.
+
+Request (`SpeechRequest`), required `input` + `voice`: `model`, `voice` (e.g. `alloy`), `response_format` (mp3 default|opus|aac|flac|wav|pcm), `speed` (0.25–4.0). Response `200`: binary audio (e.g. `audio/mpeg`). Statuses: `200`, `401`, `402`, `422`, `429`, `500`.
+
+## POST /v1/audio/transcriptions — Transcribe audio to text (STT) [Community]
+
+OpenAI-compatible STT. Inbound `multipart/form-data`: binary `file` + text fields. Rides a larger audio-specific body limit (default 26 MiB, `RP_AUDIO_MAX_BODY_BYTES`). Default provider `openai` (`whisper-1`, `gpt-4o-transcribe`); `groq` serves Whisper. Audio is binary — not text-PII-masked inbound (documented deviation); residency **region eligibility** still applies as a hard filter; audio bytes are never logged.
+
+Headers: `x-routeplane-provider`, `-strategy`, `-residency`.
+
+Request (multipart), required `file` + `model`: `language` (ISO-639-1 hint), `prompt`, `response_format` (json|text|srt|verbose_json|vtt), `temperature` (0–1). Response `200` (`TranscriptionResponse`): default `{"text":"…"}`; `verbose_json` adds `language`, `duration`, `segments`, … Statuses: `200`, `400`, `401`, `413`, `422`, `429`, `500`.
+
+## POST /v1/audio/translations — Translate audio to English text [Community]
+
+Near-twin of transcriptions — identical multipart contract **except no `language` field** (output is always English). Same body limit and residency posture. Whisper models support translation; `gpt-4o-transcribe` models do not. Statuses: `200`, `400`, `401`, `413`, `422`, `429`, `500`.
+
+## POST /v1/responses — Not supported (documented 501) [Community]
+
+The OpenAI Responses API is intentionally unsupported. Returns a typed `501` (`code: endpoint_not_supported`) directing to `POST /v1/chat/completions`. Authenticated like the rest of `/v1/*` (missing key → `401` first). Statuses: `401`, `501`.
+
+## POST /v1/feedback — Attach a quality score to a request trace [Community]
+
+Portkey-compatible. `trace_id` is the `x-routeplane-trace-id` from a prior completion. Feedback is a gateway-control signal (never flows to a provider), recorded off the hot path into the in-memory observability ring. `metadata` is bounded (≤ 16 keys; keys/string values ≤ 256 chars; flat scalars) — oversized → `400`, never silently truncated.
+
+Request (`FeedbackRequest`), required `trace_id` + `value`: `value` (int −10..10), `weight` (0.0..1.0, default 1.0), `metadata`. Response `200`: `{status:"recorded",trace_id}`. Statuses: `200`, `400`, `401`.
+
+## GET /v1/logs — Recent request logs (your keys only) [Community]
+
+The authenticated tenant's most-recent request-log rows (newest first, up to 200) from the in-memory ring (~1000 events). Tenant isolation is structural — scope is the caller's own virtual keys, resolved server-side; no client-supplied id selects scope. Rows are sanitized projections (labels, counts, outcomes — no content).
+
+Response `200`: `{ events: RequestLogRow[] }`; each row = `{ id, timestamp, virtual_key_name, provider, model, outcome (success|error|blocked), error?, prompt_tokens, completion_tokens, total_tokens, latency_ms, cost_micro_usd?, region, sovereign_routed, cache_status, guardrails[], use_case? }`. Statuses: `200`, `401`.
+
+## GET /analytics — Recent usage events (your keys only) [Community]
+
+Most-recent usage events from the in-memory ring (last 1000, process-local): successes, failures, sovereign blocks, guardrail denials, limit rejections — with token counts, provider, model, region, cache and routing-config annotations. Scoped to the caller's own keys.
+
+Response `200`: `UsageEvent[]` = `{ timestamp, virtual_key_name, provider, model, prompt_tokens, completion_tokens, total_tokens, region, sovereign_routed, success, error?, cache_status, config_ref, config_match?, prompt_id?, prompt_version?, latency_ms, use_case? }`. Statuses: `200`, `401`.
+
+## GET /analytics/latency — Latency percentiles [Community]
+
+Exact nearest-rank percentiles (p50/p95/p99/max, ms) over timed provider attempts in the ring — overall and per provider. Percentile fields omitted when there are no samples (never a misleading zero). Aggregates only.
+
+Response `200` (`LatencyReport`): `{ overall:{count,p50_ms,p95_ms,p99_ms,max_ms}, by_provider:{<provider>:{…}} }`. Statuses: `200`, `401`.
+
+## GET /status — Platform status snapshot (no auth) [Community]
+
+Read-only operational snapshot: per-provider circuit-breaker state + latency EWMA, response-cache stats, cumulative capacity-shed count, non-sensitive usage aggregate. No keys, tenant ids, bodies, or PII.
+
+Response `200` (`StatusSnapshot`): `{ shed_total, providers[]:{provider,circuit (closed|half_open|open),latency_ewma_ms}, cache:{hits,misses,hit_rate,entries,approx_bytes,oversize_drops,write_drops}, usage{…} }`.
+
+## GET /metrics — Prometheus metrics (no auth) [Community]
+
+Prometheus text exposition (`Content-Type: text/plain; version=0.0.4`), not JSON. Lock-free atomic counters, reset on process restart:
+- `rp_requests_total{provider,outcome}` — outcome ∈ `success|error|residency_blocked|guardrail_denied|rate_limited|budget_exceeded`.
+- `rp_request_duration_ms` — per-provider latency histogram (50 ms – 60 s buckets).
+- `rp_tokens_total` — prompt/completion/cached token counters.
+- `rp_cost_micro_usd_total` — attributed upstream cost (micro-USD).
+- `rp_cache_events_total{type,result}` — cache lookups (`exact`/`semantic`).
+- `rp_provider_errors_total{provider}`; `rp_hedged_wins_total`; `rp_shed_total` (deprecated unprefixed alias `shed_total`).
+
+Labels never carry tenant, key, model, or content; `provider` collapses unknown values to `other`.
+
+## GET /healthz — Liveness probe (no auth) [Community]
+
+Returns `200 OK` (plain text). `GET /` returns a plain-text service banner (no auth).
+
+---
+
+# Enterprise endpoints
+
+## GET /v1/prompts/{reference} — Fetch a stored prompt version [Enterprise]
+
+Returns the stored version object (no rendering, no upstream call). References: `prompt_<slug>` (latest), `prompt_<slug>@<label>`, `prompt_<slug>@v<N>`. Requires the prompt-registry entitlement.
+
+Response `200` (`StoredPromptVersion`): `{ prompt_id, version, template, variables[]:{name,required}, default_model, default_params }`. Statuses: `200`, `401`, `403` (`feature_not_entitled`/`feature_not_released`), `404` (`prompt_not_found`/`prompt_version_not_found`).
+
+## POST /v1/prompts/{reference}/render — Render a prompt (no upstream call) [Enterprise]
+
+Pure server-side render: mustache-style logic-less templating (`{{var}}`, `{{#var}}`/`{{^var}}` sections, `{{> prompt_ref}}` partials with depth/cycle/expansion guards). Missing required variables fail loud by default (`missing:"error"`).
+
+Request (`RenderRequest`): `{ variables{…}, missing: error|empty (default error) }`. Response `200` (`RenderResponse`): `{ prompt_id, version, label, model, messages[]:{role,content} }`. Statuses: `200`, `400` (`prompt_render_failed`/`prompt_partial_cycle`/`prompt_too_large`), `401`, `403`, `404`.
+
+## POST /v1/prompts/{reference}/completions — Render a prompt and run it [Enterprise]
+
+Renders the prompt, builds a chat completion (version defaults overridden by body fields), executes through the full pipeline — residency classification on the **rendered** text, guardrails, limits, caching, fallback. Supports `stream:true`.
+
+Headers: `-residency`, `-provider`, `-cohort`. Request (`PromptCompletionsRequest`): `RenderRequest` plus any `ChatCompletionRequest` field as override. Response `200`: `ChatCompletionResponse`. Statuses: `200`, `400`, `401`, `403`, `404`, `422`, `429`.
+
+## POST /v1/mcp/tool-result/inspect — Inspect a tool result [Enterprise]
+
+Agentic security. Runs a tool result through the deterministic threat-detection chain (secret-leak, prompt-injection, residency-leak) and returns `allow` or `deny` (fail-closed). Gated by the agentic-security entitlement — unentitled tenants receive `404` (surface never revealed).
+
+Request (`McpInspectRequest`), required `content` (the tool-result content). Response `200` (`McpVerdict`): `{ outcome: allow|deny, reason? }`; `deny` → `422` with the same shape. Statuses: `200`, `401`, `404`, `422`.
+
+## POST /v1/mcp/tool-call/authorize — Authorize an agent's MCP tool call (default-deny) [Enterprise]
+
+Default-deny: an unknown agent is refused; a known agent is allowed only if its grants cover `(server, tool)` and every argument URL clears the SSRF egress guard. A grant for one server never authorizes the same tool name on another.
+
+Request (`McpAuthorizeRequest`), required `agent_id` + `server` + `tool`: `argument_urls[]` (each SSRF-checked). Response `200` (`McpVerdict`) authorized; `422` denied (unknown agent, grant miss, or SSRF-blocked URL). Statuses: `200`, `401`, `404`, `422`.
+
+## POST /v1/mcp/run/step — Account one agent-run iteration [Enterprise]
+
+Records one tool-call iteration (and optional spend) against the run's breakers — iteration ceiling, cost budget, kill-switch — and returns `continue` or `stop`. The agent runtime must halt on `stop` (fail-closed). A run that hit a breaker returns `stop` with a `reason` at **HTTP 200** — inspect `decision`, not the status.
+
+Request (`McpRunStepRequest`), required `agent_id` + `run_id`: `cost_micro_usd` (default 0). Response `200` (`McpRunStepResponse`): `{ decision: continue|stop, reason?, iterations }`. Statuses: `200`, `401`, `404`, `422` (unknown agent → `stop`).
+
+---
+
+## SDKs & tooling
+
+- **Python** — `pip install routeplane`; `from routeplane import Routeplane` (also `AsyncRouteplane`, `headers()`). https://pypi.org/project/routeplane
+- **TypeScript / JavaScript** — `npm i @routeplane/sdk`; `import { Routeplane } from '@routeplane/sdk'` (typed core at `@routeplane/sdk/core` with `createHeaders()`). https://www.npmjs.com/package/@routeplane/sdk
+- **CLI** — `npm i -g @routeplane/cli` (the `rp` binary) or `npx @routeplane/cli status`. https://www.npmjs.com/package/@routeplane/cli
+- **MCP Server** — `npx -y @routeplane/mcp-server` (env `ROUTEPLANE_API_KEY`, `ROUTEPLANE_BASE_URL`). https://www.npmjs.com/package/@routeplane/mcp-server
+
+## Links
+
+- Rendered reference: https://docs.routeplane.ai — Community view: https://docs.routeplane.ai/community.html
+- OpenAPI 3.1 spec: https://github.com/routeplane-core/routeplane-api-docs/blob/main/openapi.yaml
+- Website: https://routeplane.ai — GitHub org: https://github.com/routeplane-core — CE source: https://github.com/routeplane-core/routeplane-ce
+- Contact: maintainers@routeplane.ai — Security: security@routeplane.ai (no public issues for vulnerabilities)
