@@ -1234,7 +1234,7 @@ components:
         * `round_robin` — rotate through healthy candidates.
         * `least_busy` — fewest in-flight requests first.
         * `canary` — A/B between the first two candidates in the chain; see
-          `x-routeplane-canary-share`. Aliases: `ab`, `a-b`.
+          `x-routeplane-canary-share-bps`. Aliases: `ab`, `a-b`.
 
         Hyphen and non-underscore spellings are accepted for the multiword
         values (`round-robin`, `roundrobin`, `least-busy`, `leastbusy`).
@@ -1310,7 +1310,7 @@ components:
         Honoured on `/v1/chat/completions` and `/v1/messages`. Not available in
         Community Edition.
     CanaryShare:
-      name: x-routeplane-canary-share
+      name: x-routeplane-canary-share-bps
       in: header
       required: false
       schema: { type: integer, minimum: 0, maximum: 10000, example: 500 }
@@ -1319,6 +1319,7 @@ components:
         (1/10000)** — so `500` is 5%, and `10000` is 100%.
 
         > **The unit is basis points, not percent.** `10` means 0.1%, not 10%.
+        > The header name carries the unit for exactly this reason.
 
         Only read when the strategy is `canary` **and** the provider chain has at
         least two candidates. Absent, `0`, or unparseable disables the experiment
