@@ -1004,9 +1004,17 @@ paths:
       summary: Authorize an agent's MCP tool call (default-deny)
       description: |
         Default-deny authorization: an unknown agent is refused; a known agent
-        is allowed only if its grants cover `(server, tool)` and every argument
-        URL clears the SSRF egress guard. Gated by the agentic-security
-        entitlement (Enterprise; **404** when not entitled).
+        is allowed only if its grants cover `(server, tool)`, the server's
+        pinned manifest has not drifted, and every argument URL clears the SSRF
+        egress guard — including after DNS resolution, so a domain that fronts
+        an internal or metadata address is refused too. A grant is scoped to
+        one server: permission to call a tool on one server never authorizes
+        the same tool name on another.
+
+        Authorized calls then count against the agent's tool-call quota, which
+        answers **429** when the ceiling is hit. Denials never consume quota.
+        Gated by the agentic-security entitlement (Enterprise; **404** when not
+        entitled).
       requestBody:
         required: true
         content:
@@ -1021,10 +1029,22 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: The tenant lacks the agentic-security entitlement. }
         '422':
-          description: Denied — unknown agent, grant miss, or an SSRF-blocked argument URL; `reason` explains.
+          description: Denied — unknown agent, grant miss, manifest drift, or an SSRF-blocked argument URL; `reason` explains.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/McpVerdict' }
+        '429':
+          description: |
+            The agent's tool-call quota for the current window is exhausted.
+            The body carries the backoff envelope and a `Retry-After` header
+            (whole seconds) accompanies it.
+          headers:
+            Retry-After:
+              description: Seconds until the agent's quota window rolls (at least 1).
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/McpQuotaDeny' }
 
   /v1/mcp/run/step:
     post:
@@ -1061,6 +1081,392 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/McpRunStepResponse' }
+
+  /v1/mcp/runs:
+    get:
+      tags: [Agentic security]
+      operationId: listAgentRuns
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Recent agent runs and their step timelines
+      description: |
+        The authenticated tenant's most-recent agent-run summaries (newest
+        first, up to 100), each with the run's step timeline in call order —
+        LLM iterations and authorized tool calls. Governance metadata only:
+        identifiers, counts, accrued cost, and closed-vocabulary status codes.
+        Tool arguments and results are never recorded here.
+
+        This reads a bounded in-memory feed, so it shows recent activity rather
+        than a complete history. Gated by the agentic-security entitlement
+        (Enterprise; **404** when not entitled).
+      responses:
+        '200':
+          description: '`{"runs": […]}` — run summaries, newest first.'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentRunSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: The tenant lacks the agentic-security entitlement. }
+
+  /v1/mcp/sampling/evaluate:
+    post:
+      tags: [Agentic security]
+      operationId: evaluateSamplingRequest
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Evaluate an MCP server's sampling request (default-deny)
+      description: |
+        When an MCP server asks to run a model on the agent's behalf
+        ("sampling"), the server-authored prompt is untrusted input. This
+        endpoint decides whether it may run — before any model is called.
+
+        Default-deny: the request is allowed only if the agent's policy grants
+        the server the sampling capability, the server is under its rate
+        ceiling, and the prompt clears the detector chain (exfiltration,
+        injection, personal data). Gated by the agentic-security entitlement
+        (Enterprise; **404** when not entitled).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/McpSamplingRequest' }
+      responses:
+        '200':
+          description: Allowed — the prompt may be sampled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/McpVerdict' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: The tenant lacks the agentic-security entitlement. }
+        '422':
+          description: Denied — unknown agent, sampling not granted for the server, rate ceiling hit, or blocked prompt content.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/McpVerdict' }
+
+  /v1/mcp/hitl/pending:
+    get:
+      tags: [Agentic security]
+      operationId: listPendingApprovals
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: List tool calls awaiting human approval
+      description: |
+        A snapshot of the authenticated tenant's currently-pending approval
+        requests — high-risk tool calls held at the enforcement point until an
+        operator approves or denies them. Each entry describes the call by
+        shape and risk label; the tool arguments themselves are never exposed.
+        Gated by the agentic-security entitlement (Enterprise; **404** when not
+        entitled).
+      responses:
+        '200':
+          description: The pending approval requests (an array; empty when nothing is held).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/HitlPendingRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: The tenant lacks the agentic-security entitlement. }
+
+  /v1/mcp/hitl/approve:
+    post:
+      tags: [Agentic security]
+      operationId: approveHeldToolCall
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Approve a held tool call
+      description: |
+        Settles a pending approval request as approved, releasing the held tool
+        call. An approval request can be settled only once — a second attempt
+        returns **409**. Gated by the agentic-security entitlement (Enterprise;
+        **404** when not entitled).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HitlResolveRequest' }
+      responses:
+        '200':
+          description: Settled — the request is now `approved`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HitlResolveResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: |
+            Unknown approval id, or the tenant lacks the agentic-security
+            entitlement. An unknown id returns `outcome: "error"` with a
+            reason; a tenant without the entitlement gets a bare 404.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/McpErrorEnvelope' }
+        '409':
+          description: The request was already settled (approved, denied, or expired).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/McpErrorEnvelope' }
+
+  /v1/mcp/hitl/deny:
+    post:
+      tags: [Agentic security]
+      operationId: denyHeldToolCall
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Deny a held tool call
+      description: |
+        Settles a pending approval request as denied, so the held tool call is
+        never executed. An approval request can be settled only once — a second
+        attempt returns **409**. Gated by the agentic-security entitlement
+        (Enterprise; **404** when not entitled).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HitlResolveRequest' }
+      responses:
+        '200':
+          description: Settled — the request is now `denied`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HitlResolveResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: Unknown approval id, or the tenant lacks the agentic-security entitlement.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/McpErrorEnvelope' }
+        '409':
+          description: The request was already settled (approved, denied, or expired).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/McpErrorEnvelope' }
+
+  /v1/mcp/hitl/status/{id}:
+    get:
+      tags: [Agentic security]
+      operationId: getApprovalStatus
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Poll the status of an approval request
+      description: |
+        The current lifecycle status of one approval request, for an agent
+        runtime waiting on a held tool call. Always **200** — an id that is not
+        found (or belongs to another tenant) reports status `unknown` rather
+        than 404, so the endpoint never reveals whether an id exists. Gated by
+        the agentic-security entitlement (Enterprise; **404** when not
+        entitled).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: The approval-request id, as listed by `GET /v1/mcp/hitl/pending`.
+      responses:
+        '200':
+          description: The request's current status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HitlStatusResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: The tenant lacks the agentic-security entitlement. }
+
+  /v1/mcp/receipt/issue:
+    post:
+      tags: [Agentic security]
+      operationId: issueActionReceipt
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Issue a signed receipt for an agent action
+      description: |
+        Issues a signed, hash-chained receipt attesting what an agent was
+        allowed to do — the agent, run, server, tool, and decision — so the
+        action trail is verifiable after the fact, offline, by anyone holding
+        the issuer's public key.
+
+        Content is bound by digest, never stored: the arguments are reduced to
+        a hash of their structure, and the tool result to a SHA-256 digest of
+        its bytes. Fail-closed — when no signer is configured the endpoint
+        returns **503** rather than emitting an unsigned receipt. Gated by the
+        agentic-security entitlement (Enterprise; **404** when not entitled).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReceiptIssueRequest' }
+      responses:
+        '200':
+          description: The signed receipt.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SignedReceipt' }
+        '400':
+          description: '`decision` was not one of `allowed`, `denied`, `held`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/McpErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: The tenant lacks the agentic-security entitlement. }
+        '422':
+          description: The presented key is bound to a different agent than the one the receipt would attest.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/McpVerdict' }
+        '500':
+          description: Signing failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/McpErrorEnvelope' }
+        '503':
+          description: No signer is configured, so no receipt can be issued (`receipts_unavailable`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/McpErrorEnvelope' }
+
+  /v1/mcp/receipt/verify:
+    post:
+      tags: [Agentic security]
+      operationId: verifyActionReceipt
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Verify a signed action receipt
+      description: |
+        Checks a receipt presented back to the gateway. Always **200** — read
+        `valid`, not the status code.
+
+        `mode` reports how much was checked. `signature` means both the chain
+        hash and the signature were verified in process. `chain_only` means the
+        signing key is held externally, so only the tamper-evident chain hash
+        was recomputed here; verify the signature offline with the issuer's
+        public key. Gated by the agentic-security entitlement (Enterprise;
+        **404** when not entitled).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignedReceipt' }
+      responses:
+        '200':
+          description: The verification outcome.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReceiptVerifyResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: The tenant lacks the agentic-security entitlement. }
+
+  /v1/mcp/anomaly/status/{agent_id}:
+    get:
+      tags: [Agentic security]
+      operationId: getAgentAnomalyStatus
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Check whether an agent is quarantined
+      description: |
+        Reports whether an agent is currently quarantined by the behavioural
+        anomaly layer, which halts an agent whose tool-call pattern has become
+        a runaway loop. A quarantined agent's tool calls are refused by
+        `POST /v1/mcp/tool-call/authorize` until the quarantine is cleared.
+        Gated by the agentic-security entitlement (Enterprise; **404** when not
+        entitled).
+      parameters:
+        - name: agent_id
+          in: path
+          required: true
+          schema: { type: string }
+          description: The agent to check.
+      responses:
+        '200':
+          description: The agent's quarantine state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnomalyStatusResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: The tenant lacks the agentic-security entitlement. }
+
+  /v1/mcp/anomaly/clear:
+    post:
+      tags: [Agentic security]
+      operationId: clearAgentQuarantine
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Clear an agent's quarantine
+      description: |
+        Releases an agent from runaway-loop quarantine and resets its loop
+        streak, so its tool calls are evaluated normally again. `cleared` is
+        `false` when the agent was not quarantined in the first place. Gated by
+        the agentic-security entitlement (Enterprise; **404** when not
+        entitled).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnomalyClearRequest' }
+      responses:
+        '200':
+          description: The outcome — `cleared` reports whether a quarantine was actually lifted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnomalyClearResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: The tenant lacks the agentic-security entitlement. }
+
+  /v1/mcp/security/events:
+    get:
+      tags: [Agentic security]
+      operationId: listMcpSecurityEvents
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Recent agentic-security enforcement events
+      description: |
+        The authenticated tenant's most-recent MCP enforcement events (newest
+        first, up to 100) — authorization and egress denials, quota exhaustion,
+        oversized tool results, and anomaly flags. Labels only: every field is
+        a closed-vocabulary code or a configured identifier, never matched
+        content, tool arguments, or results.
+
+        This reads a bounded in-memory feed, so it shows recent activity rather
+        than a complete history. Gated by the agentic-security entitlement
+        (Enterprise; **404** when not entitled).
+      responses:
+        '200':
+          description: '`{"events": […]}` — enforcement events, newest first.'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/McpSecurityEvent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: The tenant lacks the agentic-security entitlement. }
 
   /v1/logs:
     get:
@@ -2315,30 +2721,293 @@ components:
           description: The tool-result content to inspect before it re-enters the model context.
     McpAuthorizeRequest:
       type: object
-      required: [agent_id, server, tool]
+      required: [server, tool]
       properties:
-        agent_id: { type: string, description: The acting agent, resolved against the configured agent registry. }
+        agent_id:
+          type: string
+          description: |
+            The acting agent, resolved against the configured agent registry.
+            Optional when the presented key is bound to an agent identity: the
+            binding supplies the value, and a body value that disagrees with
+            the binding is denied.
         server: { type: string, description: The MCP server the tool call targets. }
         tool: { type: string, description: The tool being invoked. }
         argument_urls:
           type: array
           items: { type: string }
           description: URLs the tool call would reach — each checked against the SSRF egress guard.
+        arguments:
+          description: |
+            The full tool-call arguments. Walked recursively, so URLs nested in
+            objects or arrays are SSRF-checked too — not just the flat
+            `argument_urls` list — and scanned by the detector chain for
+            secrets, regulated personal data, and injection directives about to
+            leave through the tool.
+          example: { path: reports/q3.csv, url: 'https://api.example.com/v1/rows' }
+        server_manifest:
+          type: string
+          description: |
+            The tool manifest the caller observed for `server`. **Required when
+            the server is pinned**: the gateway re-hashes it and refuses the
+            call if the manifest has drifted since it was pinned. Omit for
+            unpinned servers.
+        run_id:
+          type: string
+          description: |
+            Optional run correlation. When present, this authorization is also
+            recorded as a `tool_call` step on that run's timeline (see
+            `GET /v1/mcp/runs`). It never affects the decision.
     McpRunStepRequest:
       type: object
-      required: [agent_id, run_id]
+      required: [run_id]
       properties:
-        agent_id: { type: string }
+        agent_id:
+          type: string
+          description: |
+            The acting agent. Optional when the presented key is bound to an
+            agent identity: the binding supplies the value, and a body value
+            that disagrees with the binding is denied.
         run_id: { type: string }
-        cost_micro_usd: { type: integer, default: 0, description: Spend to attribute to this step, in micro-USD. }
+        cost_micro_usd:
+          type: integer
+          default: 0
+          description: Spend to attribute to this step, in micro-USD.
     McpVerdict:
       type: object
       properties:
         outcome: { type: string, enum: [allow, deny] }
-        reason: { type: string, description: Why it was denied (secret-free, structured) — present only on deny. }
+        reason:
+          type: string
+          description: Why it was denied (secret-free, structured) — present only on deny.
     McpRunStepResponse:
       type: object
       properties:
         decision: { type: string, enum: [continue, stop] }
         reason: { type: string, description: Why the run was stopped (loop ceiling / budget / killed) — present only on stop. }
         iterations: { type: integer, description: Iterations consumed by the run so far. }
+    McpErrorEnvelope:
+      type: object
+      description: |
+        The error shape the agentic-security operator endpoints return — a
+        settled/unknown approval request, a bad `decision` value, or an
+        unavailable receipt signer. Distinct from `McpVerdict`, which carries an
+        enforcement decision rather than an error.
+      properties:
+        outcome: { type: string, enum: [error] }
+        reason: { type: string, description: What went wrong (secret-free). }
+    McpQuotaDeny:
+      type: object
+      description: |
+        The 429 body from `POST /v1/mcp/tool-call/authorize` when the agent's
+        tool-call quota is exhausted. Carries the backoff envelope an agent
+        runtime needs; the values are the configured ceilings, nothing more.
+      properties:
+        outcome: { type: string, enum: [deny] }
+        reason: { type: string, enum: [quota_exceeded] }
+        retry_after_ms: { type: integer, description: Milliseconds until the agent's quota window rolls. }
+        limit: { type: integer, description: The configured number of tool calls allowed per window. }
+        window_ms:
+          type: integer
+          description: The configured window length, in milliseconds.
+    McpSamplingRequest:
+      type: object
+      required: [server, prompt]
+      properties:
+        agent_id:
+          type: string
+          description: |
+            The agent the MCP server wants to sample on behalf of. Optional
+            when the presented key is bound to an agent identity: the binding
+            supplies the value, and a body value that disagrees with the
+            binding is denied.
+        server: { type: string, description: The MCP server originating the sampling request. }
+        prompt: { type: string, description: The server-authored prompt to classify before any model runs. }
+    HitlPendingRequest:
+      type: object
+      description: One tool call held for human approval. Describes the call by shape and risk, never by its arguments.
+      properties:
+        id:
+          type: string
+          description: The approval-request id — pass this to approve, deny, or status.
+        agent_id: { type: string }
+        server: { type: string }
+        tool: { type: string }
+        arg_shape:
+          type: string
+          description: A hash of the argument structure. The argument values are never exposed.
+        risk_labels:
+          type: array
+          items: { type: string }
+          description: Closed-vocabulary risk labels that caused the call to be held.
+        status: { type: string, enum: [pending, approved, denied, expired] }
+        created_millis: { type: integer, description: Unix epoch milliseconds when the call was held. }
+        expires_millis: { type: integer, description: Unix epoch milliseconds after which the request expires unresolved. }
+    HitlResolveRequest:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string, description: The approval-request id to settle. }
+        note: { type: string, description: Optional operator note. Recorded as a label; keep it free of sensitive detail. }
+    HitlResolveResponse:
+      type: object
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [approved, denied], description: The resulting lifecycle status. }
+    HitlStatusResponse:
+      type: object
+      properties:
+        id: { type: string }
+        status:
+          type: string
+          enum: [pending, approved, denied, expired, unknown]
+          description: '`unknown` when no such request is visible to the caller — an unknown id is not distinguishable from another tenant''s.'
+    ReceiptIssueRequest:
+      type: object
+      required: [run_id, server, tool, decision]
+      properties:
+        agent_id:
+          type: string
+          description: |
+            The agent the receipt attests for. Optional when the presented key
+            is bound to an agent identity: the binding supplies the value, and
+            a body value that disagrees with the binding is denied — a bound
+            key can never issue a receipt in another agent's name.
+        run_id: { type: string }
+        server: { type: string }
+        tool: { type: string }
+        arguments:
+          description: The tool-call arguments. Reduced to a hash of their structure; the values are never stored.
+        decision:
+          type: string
+          enum: [allowed, denied, held, held_for_approval]
+          description: The decision being attested. `held` and `held_for_approval` are equivalent.
+        result:
+          type: string
+          description: The tool result bytes to bind. Only their SHA-256 digest is recorded — never the content. Omit for a denied or held call.
+    ReceiptBody:
+      type: object
+      description: The attested facts of one agent action. Content appears only as digests.
+      properties:
+        schema_version: { type: integer, description: Receipt schema version. }
+        seq:
+          type: integer
+          description: Monotonic per-issuer sequence number, starting at 1.
+        agent_id: { type: string }
+        run_id: { type: string }
+        server: { type: string }
+        tool: { type: string }
+        arg_shape: { type: string, description: Hex SHA-256 of the argument structure — never the values. }
+        decision:
+          type: string
+          enum: [Allowed, Denied, HeldForApproval]
+          description: |
+            The attested decision. Note the capitalization differs from the
+            request field: an issue call sends `allowed`, and the receipt
+            records `Allowed`.
+        result_hash:
+          type: string
+          description: Hex SHA-256 of the tool result bytes, or an empty string when there was no result.
+        timestamp: { type: string, description: RFC 3339 issuance time. }
+    SignedReceipt:
+      type: object
+      description: |
+        A receipt, its position in the hash chain, and the signature over that
+        position. Verifiable offline with the issuer's public key; a missing or
+        reordered receipt breaks verification.
+      properties:
+        body: { $ref: '#/components/schemas/ReceiptBody' }
+        prev_hash: { type: string, description: The previous receipt's `entry_hash` (a genesis value for the first). }
+        entry_hash: { type: string, description: The chain hash over `prev_hash` and `body` — this is what gets signed. }
+        algorithm:
+          type: string
+          description: Signature algorithm, e.g. `PS256`.
+        key_ref:
+          type: string
+          description: Reference to the signing key, for attribution.
+        signature: { type: string, description: Signature over the digest of `entry_hash`. }
+    ReceiptVerifyResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+          description: |
+            In `signature` mode, true only when both the chain hash recomputes
+            and the signature checks out. In `chain_only` mode, true when the
+            chain hash recomputes.
+        mode:
+          type: string
+          enum: [signature, chain_only]
+          description: How much was verified in process. See the endpoint description.
+    AnomalyStatusResponse:
+      type: object
+      properties:
+        agent_id: { type: string }
+        quarantined: { type: boolean }
+    AnomalyClearRequest:
+      type: object
+      required: [agent_id]
+      properties:
+        agent_id: { type: string, description: The agent whose quarantine to lift. }
+    AnomalyClearResponse:
+      type: object
+      properties:
+        agent_id: { type: string }
+        cleared: { type: boolean, description: True only if the agent was quarantined and is now released. }
+    McpSecurityEvent:
+      type: object
+      description: One agentic-security enforcement event. Every field is a closed-vocabulary code or a configured identifier — never matched content.
+      properties:
+        ts: { type: string, description: RFC 3339 timestamp. }
+        category:
+          type: string
+          description: 'Closed-vocabulary category, e.g. `mcp_authorize_deny`, `mcp_egress_deny`, `mcp_quota_exceeded`, `mcp_result_too_large`, `mcp_anomaly_flag`.'
+        outcome: { type: string, description: 'Closed-vocabulary outcome, e.g. `deny`.' }
+        detail:
+          type: string
+          description: 'Closed-vocabulary detail code identifying what fired, e.g. `authorize`, `quota_exceeded`, `anomaly_quarantine`. Omitted when there is none.'
+        tenant_id: { type: string }
+        agent:
+          type: string
+          description: The acting agent. Omitted for events with no agent, such as auth-layer denials.
+        server: { type: string, description: The target MCP server. Omitted when not applicable. }
+        tool: { type: string, description: The tool name. Omitted when not applicable. }
+    AgentRunStep:
+      type: object
+      description: One step on a run's timeline — an LLM iteration or an authorized tool call.
+      properties:
+        idx:
+          type: integer
+          description: Per-run step index, stable as older steps age out.
+        kind: { type: string, enum: [llm_iteration, tool_call] }
+        server: { type: string, description: Present on tool-call steps. }
+        tool: { type: string, description: Present on tool-call steps. }
+        outcome:
+          type: string
+          enum: [ok, denied, allow, deny]
+          description: '`ok`/`denied` for LLM iterations, `allow`/`deny` for tool calls.'
+        cost_micro_usd:
+          type: integer
+          description: Spend attributed to this step, in micro-USD.
+        detail: { type: string, description: Closed-vocabulary reason code when the step was refused. Never content. }
+    AgentRunSummary:
+      type: object
+      description: One agent run's governance record. Identifiers, counts, and closed-vocabulary codes only.
+      properties:
+        run_id: { type: string }
+        agent_id: { type: string }
+        tenant_id: { type: string }
+        started_at: { type: string, description: RFC 3339 time the run was first seen. }
+        updated_at: { type: string, description: RFC 3339 time of the most recent step. }
+        iterations: { type: integer, description: Iterations consumed so far. }
+        cost_micro_usd:
+          type: integer
+          description: Spend accrued by the run, in micro-USD.
+        status: { type: string, enum: [running, stopped, killed] }
+        stop_reason:
+          type: string
+          enum: [iteration_ceiling, cost_budget, killed]
+          description: Why the run stopped. Present only once it has.
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/AgentRunStep' }
+          description: The run's steps in call order. Bounded per run, so a long run shows its most recent steps.
