@@ -1336,6 +1336,21 @@ components:
 
         Which arm actually served is observable on the response via
         `x-routeplane-provider`.
+
+        > **Every provider in the chain must be able to serve the requested
+        > `model`.** A request carries one model name, and promoting the candidate
+        > sends that same name to a different provider — so a chain spanning
+        > providers with disjoint model namespaces fails on the candidate arm and
+        > only on the candidate arm.
+        >
+        > This is easy to miss while ramping: assignment is per-key, so at a low
+        > share the failure appears on a small fraction of callers and reads as an
+        > intermittent provider fault rather than a configuration error. Raising
+        > the share never moves a key back, so ramping down does not fully undo it
+        > for keys already assigned.
+        >
+        > Use a chain whose providers serve the same model, or map models
+        > per-provider with a routing config.
     Residency:
       name: x-routeplane-residency
       in: header
