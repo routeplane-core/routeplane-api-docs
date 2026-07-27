@@ -158,6 +158,9 @@ paths:
         - $ref: '#/components/parameters/Provider'
         - $ref: '#/components/parameters/Strategy'
         - $ref: '#/components/parameters/CanaryShare'
+        - $ref: '#/components/parameters/Batch'
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/LogLevel'
         - $ref: '#/components/parameters/Residency'
         - $ref: '#/components/parameters/Config'
         - $ref: '#/components/parameters/Metadata'
@@ -328,6 +331,9 @@ paths:
         - $ref: '#/components/parameters/Provider'
         - $ref: '#/components/parameters/Strategy'
         - $ref: '#/components/parameters/CanaryShare'
+        - $ref: '#/components/parameters/Batch'
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/LogLevel'
         - $ref: '#/components/parameters/Residency'
       requestBody:
         required: true
@@ -1232,6 +1238,77 @@ components:
 
         Hyphen and non-underscore spellings are accepted for the multiword
         values (`round-robin`, `roundrobin`, `least-busy`, `leastbusy`).
+    Batch:
+      name: x-routeplane-batch
+      in: header
+      required: false
+      schema: { type: string, enum: [flex, eligible, "true", async, batch] }
+      description: |
+        Opt this request into a cheaper, latency-tolerant savings lane.
+
+        * `flex` / `eligible` / `true` — engage the synchronous **Flex** tier
+          (`service_tier: "flex"` on OpenAI-family providers): same model and
+          output, best-effort latency, roughly half the Standard price.
+        * `async` / `batch` — request the async Batch lane. **Today this degrades
+          to the Flex tier**; the submit/poll/reconcile lifecycle has not shipped,
+          so you get the savings and a completed answer synchronously rather than
+          a batch handle. Do not build against a polling contract yet.
+
+        Absent or unrecognised leaves the request on the standard path unchanged.
+
+        > **Requires the `batch_flex_lane` entitlement, which is in no tier
+        > baseline.** Unless it has been granted to your tenant, this header is
+        > read and then has no effect — there is no error.
+
+        A `service_tier` set explicitly in the request body always wins; the
+        gateway never overrides a caller-set tier.
+
+        Honoured on `/v1/chat/completions` and `/v1/messages`. Not available in
+        Community Edition.
+    ConversationId:
+      name: x-routeplane-conversation-id
+      in: header
+      required: false
+      schema: { type: string, example: "conv_8f2c" }
+      description: |
+        Groups related requests so repeat traffic can be preferred onto the
+        provider whose warm prompt cache last served that conversation
+        (sticky/affinity routing).
+
+        Affinity is only ever a **preference** layered on top of the ordering
+        strategy. It yields to residency eligibility, circuit-breaker health and
+        quota — so supplying this never overrides a hard constraint, and never
+        pins you to an unhealthy provider.
+
+        > **Requires the `sticky_routing` entitlement, which is in no tier
+        > baseline.** Without it the header is not read at all and routing is
+        > byte-identical to omitting it.
+
+        Honoured on `/v1/chat/completions` and `/v1/messages`. Not available in
+        Community Edition.
+    LogLevel:
+      name: x-routeplane-log-level
+      in: header
+      required: false
+      schema: { type: string, enum: [none, metadata, full] }
+      description: |
+        How much of this request may be retained in observability records.
+
+        * `none` — no request/response bodies or metadata retained.
+        * `metadata` — metadata only, no bodies.
+        * `full` — metadata and (masked) bodies.
+
+        > **This header can only NARROW visibility, never widen it.** The
+        > effective level is the minimum of what you ask for, your key's
+        > configured policy, and your tier's ceiling. Asking for `full` on a key
+        > capped at `metadata` yields `metadata`, not an error.
+
+        An unrecognised value is ignored — the request falls back to the key's
+        policy and the rejection is counted, rather than failing the call.
+        Omitting the header uses the key's policy.
+
+        Honoured on `/v1/chat/completions` and `/v1/messages`. Not available in
+        Community Edition.
     CanaryShare:
       name: x-routeplane-canary-share
       in: header
