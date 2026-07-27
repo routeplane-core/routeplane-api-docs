@@ -157,6 +157,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Provider'
         - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/CanaryShare'
         - $ref: '#/components/parameters/Residency'
         - $ref: '#/components/parameters/Config'
         - $ref: '#/components/parameters/Metadata'
@@ -326,6 +327,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Provider'
         - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/CanaryShare'
         - $ref: '#/components/parameters/Residency'
       requestBody:
         required: true
@@ -379,6 +381,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Provider'
         - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/CanaryShare'
         - $ref: '#/components/parameters/Residency'
       requestBody:
         required: true
@@ -475,6 +478,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Provider'
         - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/CanaryShare'
         - $ref: '#/components/parameters/Residency'
       requestBody:
         required: true
@@ -513,6 +517,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Provider'
         - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/CanaryShare'
         - $ref: '#/components/parameters/Residency'
       requestBody:
         required: true
@@ -551,6 +556,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Provider'
         - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/CanaryShare'
         - $ref: '#/components/parameters/Residency'
       requestBody:
         required: true
@@ -589,6 +595,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Provider'
         - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/CanaryShare'
         - $ref: '#/components/parameters/Residency'
       requestBody:
         required: true
@@ -633,6 +640,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Provider'
         - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/CanaryShare'
         - $ref: '#/components/parameters/Residency'
       requestBody:
         required: true
@@ -700,6 +708,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Provider'
         - $ref: '#/components/parameters/Strategy'
+        - $ref: '#/components/parameters/CanaryShare'
         - $ref: '#/components/parameters/Residency'
       requestBody:
         required: true
@@ -1204,8 +1213,51 @@ components:
       name: x-routeplane-strategy
       in: header
       required: false
-      schema: { type: string, enum: [priority, weighted, cost, latency] }
-      description: Candidate-ordering strategy (default `priority`). Superseded by a routing config.
+      schema:
+        type: string
+        enum: [priority, weighted, cost, latency, round_robin, least_busy, canary]
+      description: |
+        Candidate-ordering strategy (default `priority`). An unknown or empty
+        value falls back to `priority` rather than erroring. Superseded by a
+        routing config.
+
+        * `priority` — try candidates in the given fallback-chain order.
+        * `weighted` — randomized, proportional to per-provider weight.
+        * `cost` — cheapest first.
+        * `latency` — lowest observed latency first.
+        * `round_robin` — rotate through healthy candidates.
+        * `least_busy` — fewest in-flight requests first.
+        * `canary` — A/B between the first two candidates in the chain; see
+          `x-routeplane-canary-share`. Aliases: `ab`, `a-b`.
+
+        Hyphen and non-underscore spellings are accepted for the multiword
+        values (`round-robin`, `roundrobin`, `least-busy`, `leastbusy`).
+    CanaryShare:
+      name: x-routeplane-canary-share
+      in: header
+      required: false
+      schema: { type: integer, minimum: 0, maximum: 10000, example: 500 }
+      description: |
+        Candidate share for `x-routeplane-strategy: canary`, in **basis points
+        (1/10000)** — so `500` is 5%, and `10000` is 100%.
+
+        > **The unit is basis points, not percent.** `10` means 0.1%, not 10%.
+
+        Only read when the strategy is `canary` **and** the provider chain has at
+        least two candidates. Absent, `0`, or unparseable disables the experiment
+        entirely and ordering is byte-identical to `priority`.
+
+        The candidate arm is the **second** entry in `x-routeplane-provider`; when
+        a caller is assigned to it, that entry is promoted to first.
+
+        Assignment is **deterministic per virtual key**, not per request: a given
+        key hashes to a stable arm, so the same key always gets the same arm at a
+        given share. Raising the share only ever moves keys onto the candidate,
+        never back — so a ramp never flip-flops a caller. This means the split is
+        across *keys*, not across requests.
+
+        Which arm actually served is observable on the response via
+        `x-routeplane-provider`.
     Residency:
       name: x-routeplane-residency
       in: header

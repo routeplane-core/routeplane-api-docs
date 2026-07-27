@@ -1000,8 +1000,26 @@ components:
       name: x-routeplane-strategy
       in: header
       required: false
-      schema: { type: string, enum: [priority, weighted, cost, latency] }
-      description: Candidate-ordering strategy (default `priority`). Superseded by a routing config.
+      schema:
+        type: string
+        enum: [priority, weighted, cost, latency, round_robin, least_busy]
+      description: |
+        Candidate-ordering strategy (default `priority`). An unknown or empty
+        value falls back to `priority` rather than erroring. Superseded by a
+        routing config.
+
+        * `priority` — try candidates in the given fallback-chain order.
+        * `weighted` — randomized, proportional to per-provider weight.
+        * `cost` — cheapest first.
+        * `latency` — lowest observed latency first.
+        * `round_robin` — rotate through healthy candidates.
+        * `least_busy` — fewest in-flight requests first.
+
+        Hyphen and non-underscore spellings are accepted for the multiword
+        values (`round-robin`, `roundrobin`, `least-busy`, `leastbusy`).
+
+        The `canary` A/B strategy is **not** part of Community Edition; it is
+        available on the managed gateway.
     Residency:
       name: x-routeplane-residency
       in: header
