@@ -411,6 +411,43 @@ paths:
         '429': { description: Rate limited., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
         '500': { description: All providers failed., content: { text/plain: { schema: { type: string } } } }
 
+  /v1/me:
+    get:
+      tags: [System]
+      operationId: getMe
+      x-routeplane-edition: community
+      summary: What this gateway resolved for your key
+      description: |
+        Returns the calling key's own resolved identity and capabilities — the
+        tenant it maps to, its tier, and which capabilities are **actually
+        active** on this gateway right now.
+
+        This reports the gateway's *resolved* state, which is not always the same
+        as what was configured. A capability is active only if it survives every
+        input: your tier's baseline plus any grants, minus any holdback applied
+        to your key, your tenant, or the deployment, and only once released. When
+        a feature is not behaving as you expect, this is the surface that says
+        whether it is switched on at all.
+
+        `withheld_by_key` names capabilities your tier includes that **this
+        specific key** holds back — the usual reason two keys on one tenant
+        behave differently. `withheld_other` names ones held back for some other
+        reason, without attributing it further.
+
+        Both lists only ever contain capabilities your own tier includes, so
+        neither enumerates the full product surface.
+
+        Takes no parameters: it always describes the key presented in
+        `x-routeplane-api-key`, and cannot be pointed at another tenant. Costs
+        nothing — no model is called.
+      responses:
+        '200':
+          description: The calling key's resolved identity.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GatewayIdentity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /v1/models:
     get:
       tags: [Models]
@@ -1541,6 +1578,52 @@ components:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
 
   schemas:
+    GatewayIdentity:
+      type: object
+      description: The calling key's resolved identity and capabilities.
+      properties:
+        object:
+          type: string
+          example: gateway.identity
+        tenant_id:
+          type: string
+          description: The tenant this key maps to.
+          example: t_a1b2c3d4e5f6
+        key_name:
+          type: string
+          description: The virtual key's name. Never its value.
+          example: prod-eu-west
+        tier:
+          type: string
+          enum: [free, standard, business, enterprise]
+        capabilities:
+          $ref: '#/components/schemas/IdentityCapabilities'
+    IdentityCapabilities:
+      type: object
+      description: |
+        What is active for this key, and — for anything your tier includes that
+        is not — whether this key is the reason.
+      properties:
+        active:
+          type: array
+          description: Capabilities currently switched on for this key.
+          items: { type: string }
+          example: [audit_ledger, semantic_cache]
+        withheld_by_key:
+          type: array
+          description: |
+            Capabilities your tier includes that THIS key holds back. The usual
+            reason two keys on the same tenant behave differently.
+          items: { type: string }
+          example: [token_compression]
+        withheld_other:
+          type: array
+          description: |
+            Capabilities your tier includes that are off for some other reason —
+            a tenant-level holdback, a deployment-wide switch, or not yet
+            released. Deliberately not attributed further.
+          items: { type: string }
+          example: []
     ChatCompletionRequest:
       type: object
       required: [model, messages]
