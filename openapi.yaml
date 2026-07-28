@@ -4,7 +4,9 @@
 #   * every operation carries `x-routeplane-edition: community | enterprise`
 #     (exactly that line, 6-space indented, inside the operation);
 #   * each path defines exactly ONE operation, so the Community view can filter
-#     whole path chunks;
+#     whole path chunks (exception: the Control-plane admin paths group several
+#     operations per path — every operation on such a path is `enterprise`, so
+#     chunk-level filtering still holds);
 #   * Enterprise operations also carry Redoc `x-badges`.
 openapi: 3.1.0
 info:
@@ -130,6 +132,8 @@ tags:
     description: Prompt registry — versioned prompts, labels, server-side render (Enterprise)
   - name: Agentic security
     description: MCP-gateway enforcement points — tool-result inspection, tool-call authorization, and agent-run governance (Enterprise)
+  - name: Control plane
+    description: Multi-tenant admin API — organization settings and DNS-verified auto-join domains, served by the separate control-plane deployment (Enterprise)
   - name: Observability
     description: Usage analytics, request logs, latency percentiles, and feedback
   - name: System
@@ -1630,6 +1634,233 @@ paths:
                   # TYPE shed_total counter
                   shed_total 0
 
+  /api/v1/tenants/{id}/org-settings:
+    servers:
+      - url: https://{control-plane-host}
+        description: Your Routeplane control-plane deployment (not the gateway).
+        variables:
+          control-plane-host:
+            default: controlplane.example.com
+    get:
+      tags: [Control plane]
+      operationId: getOrgSettings
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Read a tenant's organization settings
+      security:
+        - ControlPlaneBearer: []
+      description: |
+        Returns the tenant's organization settings — display name, primary
+        domain with its DNS-TXT verification state, the org-wide residency /
+        compliance-framework defaults, and the auto-join role. A tenant with
+        nothing stored yet receives the unconfigured defaults (empty `name`
+        and `domain`, `domain_verified: false`, `default_residency: in`,
+        `join_role: null`). Any role with access to the tenant may read.
+      parameters:
+        - $ref: '#/components/parameters/CpTenantId'
+      responses:
+        '200':
+          description: The tenant's organization settings (stored, or the unconfigured defaults).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrgSettings' }
+        '401': { $ref: '#/components/responses/CpUnauthorized' }
+        '404': { $ref: '#/components/responses/CpTenantNotFound' }
+    put:
+      tags: [Control plane]
+      operationId: putOrgSettings
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Create or replace a tenant's organization settings
+      security:
+        - ControlPlaneBearer: []
+      description: |
+        Replaces the writable settings fields. `domain_verified` and
+        `domain_verification_token` are server state and are never accepted
+        from the client. The domain is trimmed and lowercased; changing it
+        resets `domain_verified` to `false` and issues a fresh verification
+        token — unless the new value is already declared under
+        `POST /api/v1/tenants/{id}/domains`, in which case that domain's own
+        token and verified state are adopted. Changing or clearing the
+        primary domain releases any claim held on the old one; a tenant that
+        wants to keep the old domain's auto-join while rebranding should
+        declare the new domain via `POST /api/v1/tenants/{id}/domains`
+        instead. Requires an admin-tier role on the tenant.
+      parameters:
+        - $ref: '#/components/parameters/CpTenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrgSettingsWrite' }
+      responses:
+        '200':
+          description: The stored settings after the write.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrgSettings' }
+        '400': { $ref: '#/components/responses/CpValidationError' }
+        '401': { $ref: '#/components/responses/CpUnauthorized' }
+        '403': { $ref: '#/components/responses/CpForbidden' }
+        '404': { $ref: '#/components/responses/CpTenantNotFound' }
+
+  /api/v1/tenants/{id}/domains:
+    servers:
+      - url: https://{control-plane-host}
+        description: Your Routeplane control-plane deployment (not the gateway).
+        variables:
+          control-plane-host:
+            default: controlplane.example.com
+    get:
+      tags: [Control plane]
+      operationId: listTenantDomains
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: List a tenant's auto-join domains
+      security:
+        - ControlPlaneBearer: []
+      description: |
+        Lists every domain the tenant has declared for DNS-verified
+        auto-join — a tenant may hold several (one company, several mail
+        domains), each with its own verification token, verified state, and
+        the exact TXT record name to publish. Any role with access to the
+        tenant may read.
+      parameters:
+        - $ref: '#/components/parameters/CpTenantId'
+      responses:
+        '200':
+          description: The tenant's declared domains, sorted by domain.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TenantDomain' }
+        '401': { $ref: '#/components/responses/CpUnauthorized' }
+        '404': { $ref: '#/components/responses/CpTenantNotFound' }
+    post:
+      tags: [Control plane]
+      operationId: addTenantDomain
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Declare a domain for verified auto-join
+      security:
+        - ControlPlaneBearer: []
+      description: |
+        Declares a domain the tenant intends to prove ownership of. The
+        domain is trimmed and lowercased, then validated: at most 253
+        characters of lowercase ASCII letters, digits, `-` and `.`, with at
+        least one dot and no whitespace — an internationalized domain name
+        must be sent in its punycode `xn--` form. Public email-provider
+        domains (`gmail.com`, `outlook.com`, …) are refused with **400**:
+        such a domain can never bind to one organization; invite those
+        members explicitly instead. Returns the pending record with a fresh
+        verification token and the TXT coordinates to publish — proving
+        ownership is the separate
+        `POST /api/v1/tenants/{id}/domains/{domain}/verify` step.
+        Idempotent: re-declaring an already-declared domain returns the
+        existing record. Requires an admin-tier role on the tenant.
+      parameters:
+        - $ref: '#/components/parameters/CpTenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TenantDomainRequest' }
+      responses:
+        '200':
+          description: The declared domain record with its TXT coordinates.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TenantDomain' }
+        '400': { $ref: '#/components/responses/CpValidationError' }
+        '401': { $ref: '#/components/responses/CpUnauthorized' }
+        '403': { $ref: '#/components/responses/CpForbidden' }
+        '404': { $ref: '#/components/responses/CpTenantNotFound' }
+
+  /api/v1/tenants/{id}/domains/{domain}:
+    servers:
+      - url: https://{control-plane-host}
+        description: Your Routeplane control-plane deployment (not the gateway).
+        variables:
+          control-plane-host:
+            default: controlplane.example.com
+    delete:
+      tags: [Control plane]
+      operationId: deleteTenantDomain
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Remove a declared domain
+      security:
+        - ControlPlaneBearer: []
+      description: |
+        Removes a declared domain and releases any auto-join claim it holds.
+        A claim is only ever freed by this explicit action (or by changing
+        the primary domain in org settings) — never by a lapsed TXT record.
+        Requires an admin-tier role on the tenant.
+      parameters:
+        - $ref: '#/components/parameters/CpTenantId'
+        - $ref: '#/components/parameters/CpDomainName'
+      responses:
+        '200':
+          description: The domain was removed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TenantDomainDeleted' }
+        '401': { $ref: '#/components/responses/CpUnauthorized' }
+        '403': { $ref: '#/components/responses/CpForbidden' }
+        '404': { $ref: '#/components/responses/CpDomainNotFound' }
+
+  /api/v1/tenants/{id}/domains/{domain}/verify:
+    servers:
+      - url: https://{control-plane-host}
+        description: Your Routeplane control-plane deployment (not the gateway).
+        variables:
+          control-plane-host:
+            default: controlplane.example.com
+    post:
+      tags: [Control plane]
+      operationId: verifyTenantDomain
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Verify a declared domain by DNS TXT record
+      security:
+        - ControlPlaneBearer: []
+      description: |
+        Performs a live DNS-TXT lookup for `_routeplane-verify.<domain>` and
+        compares the answer against the domain's verification token. Publish
+        a TXT record whose value is either the token itself or
+        `routeplane-verify=<token>`. On a match the domain becomes verified.
+        Anything else is an honest `domain_verified: false` with a `reason`
+        — the record may be missing, not yet propagated, or mismatched, or
+        the DNS lookup itself may have failed — never a 5xx; fix the record
+        and call again. The response echoes the exact query performed, so a
+        result can be reproduced with `dig TXT <query_name>`. Requires an
+        admin-tier role on the tenant.
+      parameters:
+        - $ref: '#/components/parameters/CpTenantId'
+        - $ref: '#/components/parameters/CpDomainName'
+      responses:
+        '200':
+          description: The verification result — for both verified and not-verified outcomes.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainVerification' }
+        '401': { $ref: '#/components/responses/CpUnauthorized' }
+        '403': { $ref: '#/components/responses/CpForbidden' }
+        '404': { $ref: '#/components/responses/CpDomainNotFound' }
+
 components:
   securitySchemes:
     RouteplaneApiKey:
@@ -1645,6 +1876,15 @@ components:
         header stock OpenAI SDKs send). Only `rp_`-prefixed gateway keys are
         accepted; a provider key (`sk-…`, …) in this header is rejected with
         401 and is never forwarded upstream.
+    ControlPlaneBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Control-plane admin credential — `Authorization: Bearer <token>`, an
+        OIDC access token issued by the deployment's identity provider
+        (Microsoft Entra ID). Used only by the Control-plane routes; gateway
+        virtual keys (`rp_…`) are not accepted there.
 
   parameters:
     Provider:
@@ -1905,6 +2145,18 @@ components:
       required: true
       schema: { type: string, example: prompt_greeting@prod }
       description: "`prompt_<slug>`, `prompt_<slug>@<label>`, or `prompt_<slug>@v<N>`."
+    CpTenantId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, example: t_a1b2c3d4e5f6 }
+      description: Tenant id.
+    CpDomainName:
+      name: domain
+      in: path
+      required: true
+      schema: { type: string, example: acme.dev }
+      description: A declared domain (matched after trimming and lowercasing).
 
   headers:
     XProvider:
@@ -1982,6 +2234,31 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    CpUnauthorized:
+      description: Missing or invalid control-plane bearer token.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ControlPlaneError' }
+    CpForbidden:
+      description: Authenticated, but the caller's role in this tenant does not grant the action (mutations require an admin-tier role).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ControlPlaneError' }
+    CpTenantNotFound:
+      description: Unknown tenant — or a tenant outside the caller's scope, which is deliberately indistinguishable (no existence leak).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ControlPlaneError' }
+    CpDomainNotFound:
+      description: The tenant is unknown / outside the caller's scope, or the domain has not been declared for this tenant.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ControlPlaneError' }
+    CpValidationError:
+      description: Malformed input — the message names the failing field and rule.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ControlPlaneError' }
 
   schemas:
     GatewayIdentity:
@@ -3011,3 +3288,178 @@ components:
           type: array
           items: { $ref: '#/components/schemas/AgentRunStep' }
           description: The run's steps in call order. Bounded per run, so a long run shows its most recent steps.
+    ControlPlaneError:
+      type: object
+      description: |
+        Control-plane error envelope — a single human-readable message. (The
+        control plane is an admin API and does not use the gateway's
+        OpenAI-shaped envelope.)
+      properties:
+        error:
+          type: string
+          example: "domain must contain a '.' (e.g. acme.ai)"
+    OrgSettings:
+      type: object
+      description: |
+        A tenant's organization settings — display name, primary domain with
+        its DNS-TXT verification state, org-wide defaults, and the role a
+        DNS-verified-domain auto-join grants.
+      properties:
+        tenant_id: { type: string, example: t_a1b2c3d4e5f6 }
+        name:
+          type: string
+          description: Organization display name. Empty until set.
+          example: Acme AI
+        domain:
+          type: string
+          description: The org's primary domain, stored lowercase. Empty until set.
+          example: acme.dev
+        domain_verified:
+          type: boolean
+          description: |
+            `true` only after a successful DNS-TXT verification of `domain`
+            against `domain_verification_token`. Reset to `false` whenever
+            `domain` changes.
+        domain_verification_token:
+          type: string
+          description: |
+            The token to publish as a TXT record at
+            `_routeplane-verify.<domain>` — either the bare token or
+            `routeplane-verify=<token>`. Regenerated whenever `domain`
+            changes.
+          example: routeplane-verify-1f2e3d4c5b6a79880919a2b3c4d5e6f7
+        default_residency:
+          type: string
+          enum: [in, eu, us, sg]
+          description: Org-wide default residency jurisdiction, stored lowercase.
+        default_frameworks:
+          type: array
+          items: { type: string }
+          description: Org-wide default compliance-framework codes.
+          example: [dpdp_rbi]
+        join_role:
+          type: [string, 'null']
+          enum: [developer, billing, viewer, read, null]
+          description: |
+            The member role a DNS-verified-domain auto-join grants in this
+            tenant. `null` means the conservative default, `viewer`.
+            Admin-tier roles are never auto-joinable.
+        updated_at: { type: string, format: date-time }
+    OrgSettingsWrite:
+      type: object
+      description: |
+        The writable organization-settings fields — a PUT replaces all of
+        them. `domain_verified` and `domain_verification_token` are server
+        state and are not accepted.
+      required: [name, domain, default_residency]
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          description: Organization display name (trimmed).
+          example: Acme AI
+        domain:
+          type: string
+          maxLength: 253
+          description: |
+            The org's primary domain, or empty to clear it. Trimmed and
+            lowercased, then validated: lowercase ASCII letters, digits, `-`
+            and `.` only, with at least one dot and no whitespace — an
+            internationalized domain name must be sent in its punycode
+            `xn--` form. Public email-provider domains are refused with 400.
+          example: acme.dev
+        default_residency:
+          type: string
+          enum: [in, eu, us, sg]
+          description: Matched case-insensitively; stored lowercase.
+        default_frameworks:
+          type: array
+          items: { type: string, maxLength: 64 }
+          maxItems: 20
+          default: []
+          description: Org-wide default compliance-framework codes. Blank entries are dropped.
+        join_role:
+          type: [string, 'null']
+          enum: [developer, billing, viewer, read, null]
+          description: |
+            The member role a DNS-verified-domain auto-join grants. Omitted,
+            `null`, or empty keeps the conservative default (`viewer`).
+            Matched case-insensitively; any other value — including the
+            admin-tier roles, which are never auto-joinable — is refused
+            with 400.
+    TenantDomainRequest:
+      type: object
+      required: [domain]
+      properties:
+        domain:
+          type: string
+          maxLength: 253
+          description: |
+            The domain to declare. Trimmed and lowercased, then validated:
+            lowercase ASCII letters, digits, `-` and `.` only, with at least
+            one dot and no whitespace — an internationalized domain name
+            must be sent in its punycode `xn--` form. Public email-provider
+            domains are refused with 400.
+          example: acme.dev
+    TenantDomain:
+      type: object
+      description: |
+        One domain a tenant has declared for DNS-verified auto-join, with
+        its own verification token and the exact TXT coordinates to publish.
+      properties:
+        id: { type: string, example: dom_9c1e4a7b8d2f4e6a90b3c5d7e8f90a1b }
+        tenant_id: { type: string, example: t_a1b2c3d4e5f6 }
+        domain:
+          type: string
+          description: The declared domain, stored lowercase.
+          example: acme.dev
+        verify_token:
+          type: string
+          description: |
+            The token to publish as a TXT record at `query_name` — either
+            the bare token or `routeplane-verify=<token>`.
+          example: routeplane-verify-1f2e3d4c5b6a79880919a2b3c4d5e6f7
+        verified:
+          type: boolean
+          description: '`true` while the most recent DNS-TXT verification of this domain succeeded.'
+        verified_at:
+          type: [string, 'null']
+          format: date-time
+          description: When this domain first verified. `null` until it has.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        query_name:
+          type: string
+          description: The DNS TXT record name to publish — `_routeplane-verify.<domain>`.
+          example: _routeplane-verify.acme.dev
+    DomainVerification:
+      type: object
+      description: The result of a DNS-TXT domain verification.
+      properties:
+        domain_verified:
+          type: boolean
+          description: '`true` when a returned TXT record matched the expected token.'
+        query_name:
+          type: string
+          description: The TXT name queried — reproduce the check with `dig TXT <query_name>`.
+          example: _routeplane-verify.acme.dev
+        expected_record:
+          type: string
+          description: The token the TXT record must carry — either bare or as `routeplane-verify=<token>`.
+          example: routeplane-verify-1f2e3d4c5b6a79880919a2b3c4d5e6f7
+        found_records:
+          type: array
+          items: { type: string }
+          description: The TXT values the resolver actually returned (de-quoted).
+        checked_at: { type: string, format: date-time }
+        reason:
+          type: string
+          description: |
+            Why `domain_verified` is `false` — the record is missing or does
+            not match, or the DNS lookup failed. Absent on success.
+          example: no TXT record at _routeplane-verify.acme.dev matched the expected token
+    TenantDomainDeleted:
+      type: object
+      properties:
+        deleted: { type: boolean, example: true }
+        domain: { type: string, example: acme.dev }
