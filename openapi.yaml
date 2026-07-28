@@ -1686,10 +1686,11 @@ paths:
         token — unless the new value is already declared under
         `POST /api/v1/tenants/{id}/domains`, in which case that domain's own
         token and verified state are adopted. Changing or clearing the
-        primary domain releases any claim held on the old one; a tenant that
-        wants to keep the old domain's auto-join while rebranding should
-        declare the new domain via `POST /api/v1/tenants/{id}/domains`
-        instead. Requires an admin-tier role on the tenant.
+        primary domain demotes the old domain to a kept secondary: its
+        verification and auto-join keep working, it simply stops being the
+        primary. To stop auto-join from a domain, remove it explicitly with
+        `DELETE /api/v1/tenants/{id}/domains/{domain}`. Requires an
+        admin-tier role on the tenant.
       parameters:
         - $ref: '#/components/parameters/CpTenantId'
       requestBody:
@@ -1804,8 +1805,9 @@ paths:
         - ControlPlaneBearer: []
       description: |
         Removes a declared domain and releases any auto-join claim it holds.
-        A claim is only ever freed by this explicit action (or by changing
-        the primary domain in org settings) — never by a lapsed TXT record.
+        A claim is only ever freed by this explicit action — never by a
+        lapsed TXT record, and never as a side effect of changing the
+        primary domain in org settings (that only demotes).
         Requires an admin-tier role on the tenant.
       parameters:
         - $ref: '#/components/parameters/CpTenantId'
