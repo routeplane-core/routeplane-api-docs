@@ -24,7 +24,7 @@ The unauthenticated routes are `GET /status`, `GET /metrics`, `GET /healthz`, an
 
 ## Providers
 
-15 integrations, selected via `x-routeplane-provider` (single value or comma-separated fallback chain): `openai`, `anthropic`, `gemini`, `azure_openai`, `mistral`, `cohere`, `bedrock`, `groq`, `deepseek`, `together`, `fireworks`, `xai`, `openrouter`, `self_hosted` (generic OpenAI-compatible: vLLM / Ollama / LocalAI), plus a built-in `local` moderation source.
+23 integrations, selected via `x-routeplane-provider` (single value or comma-separated fallback chain): `openai`, `anthropic`, `gemini`, `azure_openai`, `mistral`, `cohere`, `bedrock`, `groq`, `deepseek`, `together`, `fireworks`, `xai`, `openrouter`, `perplexity`, `cerebras`, `sambanova`, `nebius`, `anyscale`, `novita`, `moonshot`, `deepinfra`, `self_hosted` (generic OpenAI-compatible: vLLM / Ollama / LocalAI), plus a built-in `local` moderation source. The last eight speak the OpenAI wire format; `sambanova`, `nebius`, `novita` and `deepinfra` also serve `/v1/embeddings`. None of the eight declares a resident region, so none is eligible under sovereign routing.
 
 ## OpenAI & Anthropic compatibility
 
