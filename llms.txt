@@ -20,7 +20,7 @@ Both resolve through the same constant-time lookup. A non-`rp_` Bearer value (e.
 
 ## Providers
 
-15 provider integrations, selected (or chained) via `x-routeplane-provider`: OpenAI, Anthropic, Google Gemini, Azure OpenAI, Mistral, Cohere, Amazon Bedrock, Groq, DeepSeek, Together AI, Fireworks AI, xAI (Grok), OpenRouter, a generic OpenAI-compatible `self_hosted` adapter (vLLM / Ollama / LocalAI), plus a built-in `local` moderation source. A comma-separated value like `openai,anthropic` is a fallback chain.
+23 provider integrations, selected (or chained) via `x-routeplane-provider`: OpenAI, Anthropic, Google Gemini, Azure OpenAI, Mistral, Cohere, Amazon Bedrock, Groq, DeepSeek, Together AI, Fireworks AI, xAI (Grok), OpenRouter, Perplexity, Cerebras, SambaNova, Nebius AI Studio, Anyscale, Novita AI, Moonshot AI, DeepInfra, a generic OpenAI-compatible `self_hosted` adapter (vLLM / Ollama / LocalAI), plus a built-in `local` moderation source. A comma-separated value like `openai,anthropic` is a fallback chain.
 
 ## Core endpoints
 

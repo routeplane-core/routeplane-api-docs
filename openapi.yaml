@@ -57,12 +57,24 @@ info:
       [Community Edition view](community.html).
 
     ## Providers
-    15 provider integrations: OpenAI, Anthropic, Google Gemini, Azure OpenAI,
+    23 provider integrations: OpenAI, Anthropic, Google Gemini, Azure OpenAI,
     Mistral, Cohere, Amazon Bedrock, Groq, DeepSeek, Together AI, Fireworks
-    AI, xAI (Grok), OpenRouter, a generic OpenAI-compatible `self_hosted`
-    adapter (vLLM / Ollama / LocalAI / any compatible endpoint), and a
-    built-in `local` moderation source. Select one — or a comma-separated
-    fallback chain — with `x-routeplane-provider`.
+    AI, xAI (Grok), OpenRouter, Perplexity, Cerebras, SambaNova, Nebius AI
+    Studio, Anyscale, Novita AI, Moonshot AI, DeepInfra, a generic
+    OpenAI-compatible `self_hosted` adapter (vLLM / Ollama / LocalAI / any
+    compatible endpoint), and a built-in `local` moderation source. Select
+    one — or a comma-separated fallback chain — with `x-routeplane-provider`.
+
+    `perplexity`, `cerebras`, `sambanova`, `nebius`, `anyscale`, `novita`,
+    `moonshot` and `deepinfra` speak the OpenAI wire format against their
+    published base URLs. Each is always registered but inert until a request
+    routes to it *and* its credential resolves — an unconfigured one answers
+    with the usual `routeplane_provider_not_configured` envelope rather than
+    disappearing from the chain. Of the eight, `sambanova`, `nebius`,
+    `novita` and `deepinfra` also serve `POST /v1/embeddings`. None of the
+    eight declares a resident region, so none is ever eligible under
+    sovereign routing — Routeplane does not assert residency on a
+    third-party cloud's behalf.
 
     ## OpenAI compatibility
     `POST /v1/chat/completions`, `POST /v1/embeddings`, `GET /v1/models`, and
@@ -254,6 +266,12 @@ paths:
             model-catalog governance (an Enterprise capability). In `warn`
             mode the request proceeds and carries
             `x-routeplane-compliance-warning` instead.
+
+            The same status also covers `model_not_provisioned`: the model is
+            absent from the key's configured provisioned allowlist. Rejected
+            before any provider call or spend, and consistent with
+            `GET /v1/models`, which does not list it. A key with no allowlist
+            configured is unrestricted and never sees this code.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
@@ -471,9 +489,25 @@ paths:
         modalities, capabilities, context window, compliance restrictions) —
         OpenAI SDKs ignore it as an unknown field; entries with no known
         metadata omit it entirely.
+
+        **Per-tenant filtering.** Under model-catalog governance (an
+        Enterprise capability), a key that has a **non-empty** provisioned
+        model allowlist sees only the models on it — the catalog is the set
+        you were provisioned, not the set that exists. A key with **no**
+        allowlist configured is unrestricted and receives the full catalog,
+        so an unprovisioned key is unaffected. Combos (`owned_by:
+        "routeplane"`) are always listed: dispatch resolves a combo through
+        its saved chain rather than the bare model id, so the allowlist would
+        otherwise hide an id that is genuinely addressable.
+
+        The filter and the dispatch check agree. Sending an unprovisioned
+        model to `POST /v1/chat/completions` is rejected **403**
+        `model_not_provisioned` before any provider call or spend, and
+        `GET /v1/models/{id}` answers **404** for the same id — a model you
+        cannot list is a model you cannot invoke.
       responses:
         '200':
-          description: The model list.
+          description: The model list — filtered to the key's provisioned allowlist when one is configured.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ModelList' }
@@ -485,7 +519,14 @@ paths:
       operationId: retrieveModel
       x-routeplane-edition: community
       summary: Retrieve one model
-      description: The single OpenAI-shaped model object (base model or combo), or a 404 error envelope (`model_not_found`) for an unknown id.
+      description: |
+        The single OpenAI-shaped model object (base model or combo), or a 404
+        error envelope (`model_not_found`) for an unknown id.
+
+        Mirrors the `GET /v1/models` allowlist filter: when the key has a
+        configured provisioned allowlist, a model outside it is **404** here
+        too — list and retrieve never disagree. Combos are exempt, as on the
+        list route.
       parameters:
         - name: id
           in: path
@@ -1862,6 +1903,99 @@ paths:
         '401': { $ref: '#/components/responses/CpUnauthorized' }
         '403': { $ref: '#/components/responses/CpForbidden' }
         '404': { $ref: '#/components/responses/CpDomainNotFound' }
+
+  /api/v1/tenants/{id}/ledger:
+    servers:
+      - url: https://{control-plane-host}
+        description: Your Routeplane control-plane deployment (not the gateway).
+        variables:
+          control-plane-host:
+            default: controlplane.example.com
+    get:
+      tags: [Control plane]
+      operationId: queryTenantLedger
+      x-routeplane-edition: enterprise
+      x-badges:
+        - name: Enterprise
+          color: '#8B5CF6'
+      summary: Page a tenant's sovereign audit ledger
+      security:
+        - ControlPlaneBearer: []
+      description: |
+        The compliance drill-down: a paginated, **newest-first** read of the
+        tenant's hash-chained sovereign audit ledger, served straight off the
+        signed chain. There is no materialized view and no second copy of
+        audit truth — the chain remains the single authority, and a page read
+        touches only the chain segments needed to fill it.
+
+        **Label-only projection.** Entries cross this seam through an explicit
+        allowlist of structural fields and closed-vocabulary values: labels,
+        region codes, the outcome, timestamps and counts. Prompt and
+        completion text never enter the ledger in the first place, and the
+        free-text-adjacent fields it does hold — the model id, the classifier
+        version and confidence, the request id, and detector payloads — are
+        deliberately withheld here. Use this endpoint for evidence you intend
+        to show an auditor; it is safe to render without further redaction.
+
+        **Reading, not issuing.** A read-level role on the tenant suffices,
+        and unlike artifact generation this call appends no admin-audit
+        record — it behaves like `/audit` and `/logs`. For a *signed*,
+        independently verifiable evidence bundle, generate an artifact
+        instead; this endpoint is the human-facing view over the same chain.
+
+        **Aggregates** are computed over the entries on **this page only**,
+        not the whole chain. They summarize what you are looking at; they are
+        not chain totals, and paging changes them.
+
+        **Paging.** Follow `next_cursor` to walk backwards in time. The cursor
+        is opaque — its encoding is a storage detail and may change, so pass
+        it back verbatim and never construct one. `next_cursor: null` is the
+        only end-of-chain signal; a final page can legitimately be empty when
+        the remainder expired between fetches. Two honest edge cases: a page
+        boundary held across new writes can re-serve a handful of
+        just-written entries, because offsets are taken over an append-only
+        chain; and a cursor naming a segment since removed by retention
+        resumes at the next-older segment rather than erroring.
+      parameters:
+        - $ref: '#/components/parameters/CpTenantId'
+        - name: profile
+          in: query
+          required: false
+          schema: { type: string, default: dpdp_rbi }
+          description: |
+            Which compliance profile's chain to read — a tenant may keep more
+            than one. Defaults to profile #0, `dpdp_rbi` (India DPDP / RBI).
+            Must be a valid closed-charset label; anything else is a 400.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+          description: Page size. Values outside 1–200 are clamped, not rejected.
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+          description: Opaque resume position echoed from a prior page's `next_cursor`.
+      responses:
+        '200':
+          description: One page of the tenant's chain, newest entry first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LedgerPage' }
+        '400':
+          description: Malformed `cursor`, or a `profile` that is not a valid label.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ControlPlaneError' }
+        '401': { $ref: '#/components/responses/CpUnauthorized' }
+        '404': { $ref: '#/components/responses/CpTenantNotFound' }
+        '503':
+          description: |
+            The ledger store is unreachable. The chain is intact — this is a
+            read-availability failure, not evidence loss. Retry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ControlPlaneError' }
 
 components:
   securitySchemes:
@@ -3465,3 +3599,120 @@ components:
       properties:
         deleted: { type: boolean, example: true }
         domain: { type: string, example: acme.dev }
+
+    LedgerPage:
+      type: object
+      description: One newest-first page of a tenant's sovereign audit chain.
+      required: [tenant_id, profile_id, entries, aggregates]
+      properties:
+        tenant_id: { type: string, example: t_a1b2c3d4e5f6 }
+        profile_id:
+          type: string
+          description: The compliance profile whose chain was read.
+          example: dpdp_rbi
+        entries:
+          type: array
+          description: The page's entries, newest first.
+          items: { $ref: '#/components/schemas/LedgerEntryView' }
+        aggregates: { $ref: '#/components/schemas/LedgerPageAggregates' }
+        next_cursor:
+          type: [string, 'null']
+          description: |
+            Pass back as `?cursor=` to fetch the next-older page. `null` means
+            the chain is exhausted — the only end-of-chain signal. Opaque:
+            never parse or construct it.
+          example: MjAyNjozOjUw
+
+    LedgerEntryView:
+      type: object
+      description: |
+        One chained routing decision, projected to the PII-free allowlist.
+        Every value is either structural or drawn from a closed vocabulary.
+      required:
+        [entry_id, seq, timestamp, contains_regulated_data, data_classes,
+         residency_required, required_regions, sovereign_routed,
+         client_override_applied, outcome, usage]
+      properties:
+        entry_id: { type: string, description: Stable id of this chain entry. }
+        seq:
+          type: integer
+          format: int64
+          description: Position in the tenant's chain, ascending. Gaps are not expected.
+        timestamp: { type: string, format: date-time }
+        provider:
+          type: [string, 'null']
+          description: The provider that served the request, or `null` when none did (a blocked or wholly failed request).
+          example: openai
+        region:
+          type: [string, 'null']
+          description: The jurisdiction the serving provider resolved to.
+          example: IN
+        contains_regulated_data:
+          type: boolean
+          description: The residency classifier found regulated personal data in the request.
+        data_classes:
+          type: array
+          items: { type: string }
+          description: Closed-vocabulary labels for what was found — the class only, never the value.
+          example: [aadhaar, email]
+        residency_required:
+          type: boolean
+          description: A residency jurisdiction constrained where this request could be routed.
+        required_regions:
+          type: array
+          items: { type: string }
+          description: The jurisdictions eligible providers had to be resident in.
+          example: [IN]
+        sovereign_routed:
+          type: boolean
+          description: Provider selection was region-locked by the sovereign-routing constraint.
+        client_override_applied:
+          type: boolean
+          description: |
+            The caller's `x-routeplane-provider` chain was overridden. Residency
+            is a hard constraint, so a client preference that conflicts with it
+            loses — and the fact is recorded here.
+        outcome:
+          type: string
+          enum: [ok, residency_blocked, all_failed, stream_truncated]
+          description: |
+            How the request ended. `stream_truncated` is recorded faithfully
+            for a stream that began and then failed mid-flight — such a
+            request is never logged as `ok`.
+        usage: { $ref: '#/components/schemas/LedgerUsageTotals' }
+
+    LedgerUsageTotals:
+      type: object
+      description: Token counts for the entry.
+      properties:
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        total_tokens: { type: integer }
+
+    LedgerPageAggregates:
+      type: object
+      description: |
+        Counts over **this page's** entries only — a summary of what was
+        returned, not chain-wide totals. They change as you page.
+      required: [total, regulated, regulated_pct, sovereign_routed, residency_blocked, all_failed]
+      properties:
+        total:
+          type: integer
+          description: Entries on this page.
+        regulated:
+          type: integer
+          description: Entries where regulated personal data was detected.
+        regulated_pct:
+          type: number
+          format: double
+          description: '`regulated` as a percentage of `total`; `0` when the page is empty.'
+          example: 12.5
+        sovereign_routed:
+          type: integer
+          description: Entries whose provider selection was region-locked.
+        residency_blocked:
+          type: integer
+          description: Entries refused because no jurisdiction-resident provider was eligible (the gateway's 422).
+        all_failed:
+          type: integer
+          description: Entries where every eligible provider failed.
