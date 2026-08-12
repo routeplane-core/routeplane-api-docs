@@ -12,8 +12,8 @@ open-source, OpenAI-compatible AI gateway. Maintained by the Routeplane team.
 
 The source of truth is [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1), rendered
 with a pinned, integrity-checked Redoc bundle via GitHub Pages. The Community
-view renders the checked-in [`openapi.ce.yaml`](openapi.ce.yaml), generated
-from the same edition markers so the public CE contract is reviewable in CI.
+view renders the checked-in [`openapi.ce.yaml`](openapi.ce.yaml), a deliberately
+maintained mirror of the Community operations.
 
 **AI agents / LLMs:** see [`llms.txt`](llms.txt) for a machine-readable API
 overview (auth, base URLs, endpoints, headers, SDKs, examples), and
@@ -23,12 +23,11 @@ and [/llms-full.txt](https://docs.routeplane.ai/llms-full.txt).
 
 ## Versioning
 
-`info.version` in `openapi.yaml` states the gateway release the spec was
-verified against (currently **v0.1.32**). The spec is a hand-maintained mirror
-of the shipped surface: it documents only behavior verified against that
-release, and it is refreshed as part of the gateway release process. If you
-find a mismatch between the spec and a running gateway, that is a bug — please
-report it.
+`info.version` in `openapi.yaml` records the most recent tagged release baseline
+(currently **v0.1.32**). Additive contract changes may merge after their gateway
+implementation and before the next release tag; each such PR links its shipped
+implementation evidence. If the spec disagrees with the corresponding gateway
+commit or later release, please report it.
 
 ## Editions
 
@@ -98,8 +97,8 @@ curl https://<gateway-host>/v1/chat/completions \
 | `POST /v1/cache/purge` | Purge this authenticated tenant's exact-cache namespace(s) | Community |
 | `GET /v1/logs` | Recent request logs (your keys only) | Community |
 | `GET /analytics` + `/analytics/latency` | Recent usage events + latency percentiles | Community |
-| `GET /status` | Operational snapshot (no auth) | Community |
-| `GET /metrics` | Protected Prometheus text exposition (operator credential required by default) | Community |
+| `GET /status` | Fixed liveness in managed Enterprise; operational snapshot in CE | Community |
+| `GET /metrics` | Dedicated operator credential in managed Enterprise; unauthenticated in CE | Community |
 | `GET /healthz` | Liveness (no auth) | Community |
 | `GET /v1/prompts/{ref}` (+ `/render`, `/completions`) | Versioned prompt registry | Enterprise |
 | `POST /v1/mcp/tool-result/inspect` | Agentic security — inspect a tool result | Enterprise |

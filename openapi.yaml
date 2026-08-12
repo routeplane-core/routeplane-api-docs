@@ -913,13 +913,13 @@ paths:
       tags: [Cache]
       operationId: purgeResponseCache
       x-routeplane-edition: community
-      summary: Purge this tenant's exact-response cache
+      summary: Purge this tenant's response-cache generations
       description: |
-        Invalidates exact-cache entries for the authenticated virtual key's
+        Invalidates exact- and semantic-cache generations for the authenticated virtual key's
         explicit canonical tenant identity. An optional `namespace` purges one
         namespace; an absent or empty body purges all namespaces for that tenant.
         Tenant identity is never accepted from the request body. Invalid,
-        unknown, zero-share, or legacy display-name-only identities cannot purge
+        unknown or legacy display-name-only identities cannot purge
         cache state. Purge is per replica; prior-generation entries become
         unreachable immediately and age out under the bounded cache policy.
       requestBody:
@@ -1634,18 +1634,15 @@ paths:
       tags: [System]
       operationId: getStatus
       x-routeplane-edition: community
-      summary: Platform status snapshot (no auth)
+      summary: Fixed liveness status (no auth)
       security: []
       description: |
-        Read-only operational snapshot: per-provider circuit-breaker state and
-        latency EWMA, response-cache statistics, the cumulative capacity-shed
-        count, and a non-sensitive aggregate of recent usage. Carries only
-        aggregate operational state — no keys, tenant ids, bodies, or PII —
-        which is what makes it safe to serve unauthenticated (like
-        `/healthz`).
+        Fixed, content-free liveness document. Fleet counters, provider state,
+        cache posture, and tenant/resource aggregates are available only on the
+        dedicated operator-authenticated `/metrics` surface.
       responses:
         '200':
-          description: The status snapshot.
+          description: Fixed liveness document.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/StatusSnapshot' }
@@ -1683,13 +1680,16 @@ paths:
       tags: [System]
       operationId: metrics
       x-routeplane-edition: community
-      summary: Protected Prometheus metrics
+      summary: Operator-authenticated Prometheus metrics
+      security:
+        - MetricsApiKey: []
+        - MetricsBearer: []
       description: |
         SRE metrics in the **Prometheus text exposition format**
-        (`Content-Type: text/plain; version=0.0.4`) — not JSON. Metric
-        Requires a dedicated operator metrics credential by default. Deployments
-        may explicitly opt out with `RP_METRICS_PUBLIC=on`; public exposure is
-        not the default. Families reset on process restart:
+        (`Content-Type: text/plain; version=0.0.4`) — not JSON.
+        Requires a currently valid credential from the dedicated metrics
+        credential plane. Ordinary tenant keys never authorize this endpoint.
+        Families reset on process restart:
 
         * `rp_requests_total{provider, outcome}` — requests by provider and
           outcome (`success`, `error`, `residency_blocked`,
@@ -1731,6 +1731,7 @@ paths:
                   rp_shed_total 0
                   # TYPE shed_total counter
                   shed_total 0
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/v1/tenants/{id}/org-settings:
     servers:
@@ -2069,6 +2070,15 @@ components:
         header stock OpenAI SDKs send). Only `rp_`-prefixed gateway keys are
         accepted; a provider key (`sk-…`, …) in this header is rejected with
         401 and is never forwarded upstream.
+    MetricsApiKey:
+      type: apiKey
+      in: header
+      name: x-routeplane-api-key
+      description: Dedicated, currently valid operator metrics credential. Ordinary tenant virtual keys are rejected.
+    MetricsBearer:
+      type: http
+      scheme: bearer
+      description: Dedicated operator metrics credential in the OpenAI-compatible Bearer header form.
     ControlPlaneBearer:
       type: http
       scheme: bearer
@@ -3122,46 +3132,10 @@ components:
           description: New replica-local purge generation for the selected scope.
     StatusSnapshot:
       type: object
+      required: [status]
+      additionalProperties: false
       properties:
-        shed_total:
-          type: integer
-          description: Cumulative capacity sheds since process start.
-        providers:
-          type: array
-          items:
-            type: object
-            properties:
-              provider: { type: string }
-              circuit: { type: string, enum: [closed, half_open, open] }
-              latency_ewma_ms:
-                type: ['number', 'null']
-                description: Latency EWMA in ms — null until the first sample.
-        cache:
-          type: object
-          properties:
-            hits: { type: integer }
-            misses: { type: integer }
-            hit_rate: { type: number }
-            entries: { type: integer }
-            approx_bytes: { type: integer }
-            oversize_drops: { type: integer }
-            write_drops: { type: integer }
-            tenant_count:
-              type: integer
-              description: Canonical tenant identities in the immutable cache authority registry.
-            storage_budget_bytes:
-              type: integer
-              description: Fixed response-storage envelope after bounded writer admission is reserved.
-            queued_bytes:
-              type: integer
-              description: Aggregate bytes currently admitted to tenant-local write lanes.
-            min_effective_entry_bytes:
-              type: integer
-              description: Smallest positive tenant response-entry ceiling under the current capacity plan.
-        usage:
-          type: object
-          description: Non-sensitive aggregate of the recent usage ring (window size, success/failure counts, per-provider counts) — no keys, models, or content.
-          additionalProperties: true
+        status: { type: string, const: ok }
     StoredPromptVersion:
       type: object
       properties:
