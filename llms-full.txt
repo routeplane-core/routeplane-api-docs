@@ -189,6 +189,17 @@ Portkey-compatible. `trace_id` is the `x-routeplane-trace-id` from a prior compl
 
 Request (`FeedbackRequest`), required `trace_id` + `value`: `value` (int −10..10), `weight` (0.0..1.0, default 1.0), `metadata`. Response `200`: `{status:"recorded",trace_id}`. Statuses: `200`, `400`, `401`.
 
+## POST /v1/cache/purge — Purge this tenant's exact-response cache [Community]
+
+Advances the exact-cache purge generation for the authenticated key's explicit
+canonical tenant identity. Body is optional: `{ "namespace": "support" }`
+purges one namespace; an absent body purges all tenant namespaces. Tenant
+identity is never accepted from the body. Invalid namespace → `400`; missing or
+legacy-only tenant authority → `403`; bounded scope exhaustion → `429`.
+
+Response `200`: `{ purged:true, tenant, namespace, generation }`. Statuses:
+`200`, `400`, `401`, `403`, `429`.
+
 ## GET /v1/logs — Recent request logs (your keys only) [Community]
 
 The authenticated tenant's most-recent request-log rows (newest first, up to 200) from the in-memory ring (~1000 events). Tenant isolation is structural — scope is the caller's own virtual keys, resolved server-side; no client-supplied id selects scope. Rows are sanitized projections (labels, counts, outcomes — no content).
@@ -211,16 +222,19 @@ Response `200` (`LatencyReport`): `{ overall:{count,p50_ms,p95_ms,p99_ms,max_ms}
 
 Read-only operational snapshot: per-provider circuit-breaker state + latency EWMA, response-cache stats, cumulative capacity-shed count, non-sensitive usage aggregate. No keys, tenant ids, bodies, or PII.
 
-Response `200` (`StatusSnapshot`): `{ shed_total, providers[]:{provider,circuit (closed|half_open|open),latency_ewma_ms}, cache:{hits,misses,hit_rate,entries,approx_bytes,oversize_drops,write_drops}, usage{…} }`.
+Response `200` (`StatusSnapshot`): `{ shed_total, providers[]:{provider,circuit (closed|half_open|open),latency_ewma_ms}, cache:{hits,misses,hit_rate,entries,approx_bytes,oversize_drops,write_drops,tenant_count,storage_budget_bytes,queued_bytes,min_effective_entry_bytes}, usage{…} }`.
 
-## GET /metrics — Prometheus metrics (no auth) [Community]
+## GET /metrics — Protected Prometheus metrics [Community]
 
-Prometheus text exposition (`Content-Type: text/plain; version=0.0.4`), not JSON. Lock-free atomic counters, reset on process restart:
+Prometheus text exposition (`Content-Type: text/plain; version=0.0.4`), not JSON. A dedicated operator credential is required by default (`RP_METRICS_PUBLIC=on` is the explicit opt-out). Lock-free atomic counters, reset on process restart:
 - `rp_requests_total{provider,outcome}` — outcome ∈ `success|error|residency_blocked|guardrail_denied|rate_limited|budget_exceeded`.
 - `rp_request_duration_ms` — per-provider latency histogram (50 ms – 60 s buckets).
 - `rp_tokens_total` — prompt/completion/cached token counters.
 - `rp_cost_micro_usd_total` — attributed upstream cost (micro-USD).
 - `rp_cache_events_total{type,result}` — cache lookups (`exact`/`semantic`).
+- `rp_telemetry_dropped_total{record,reason}` — bounded-plane drops with closed label vocabularies.
+- `rp_semantic_cache_capacity{measure}` and `rp_semantic_cache_verifier_ready` — aggregate-only enterprise readiness; readiness 0 is the fail-closed dark posture.
+- `rp_semantic_cache_insert_dropped_total{reason}` and `rp_semantic_cache_verification_{admission,runtime}_total{outcome}` — aggregate closed-admission outcomes.
 - `rp_provider_errors_total{provider}`; `rp_hedged_wins_total`; `rp_shed_total` (deprecated unprefixed alias `shed_total`).
 
 Labels never carry tenant, key, model, or content; `provider` collapses unknown values to `other`.
@@ -232,6 +246,11 @@ Returns `200 OK` (plain text). `GET /` returns a plain-text service banner (no a
 ---
 
 # Enterprise endpoints
+
+Semantic-cache machinery is evaluation-gated and remains fail-closed/dark
+until the production verifier is provisioned and the ADR-105 held-out plus
+production-shadow acceptance bars pass. Entitlement alone does not arm
+semantic answer serving.
 
 ## GET /v1/prompts/{reference} — Fetch a stored prompt version [Enterprise]
 

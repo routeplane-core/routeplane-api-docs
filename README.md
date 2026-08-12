@@ -11,9 +11,9 @@ open-source, OpenAI-compatible AI gateway. Maintained by the Routeplane team.
   [docs.routeplane.ai/community.html](https://docs.routeplane.ai/community.html)
 
 The source of truth is [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1), rendered
-with a pinned, integrity-checked Redoc bundle via GitHub Pages. There is no
-build step: `community.html` filters the same spec client-side by the
-`x-routeplane-edition` markers, so the two views can never drift apart.
+with a pinned, integrity-checked Redoc bundle via GitHub Pages. The Community
+view renders the checked-in [`openapi.ce.yaml`](openapi.ce.yaml), generated
+from the same edition markers so the public CE contract is reviewable in CI.
 
 **AI agents / LLMs:** see [`llms.txt`](llms.txt) for a machine-readable API
 overview (auth, base URLs, endpoints, headers, SDKs, examples), and
@@ -41,8 +41,10 @@ carries the vendor extension `x-routeplane-edition: community | enterprise`:
   cache, rate/spend limits, baseline PII masking, and the observability reads.
 - **Enterprise** (commercial) — sovereign data-residency enforcement with the
   signed audit ledger, the agentic-security (MCP) gateway, advanced
-  guardrails, semantic cache, the prompt registry, FinOps export, and the
-  multi-tenant control plane.
+  guardrails, evaluation-gated semantic-cache machinery, the prompt registry,
+  FinOps export, and the multi-tenant control plane. Semantic answer serving is
+  not implied by entitlement: it remains dark until the production verifier is
+  provisioned and the ADR-105 held-out and production-shadow bars pass.
 
 ## Quickstart
 
@@ -93,10 +95,11 @@ curl https://<gateway-host>/v1/chat/completions \
 | `POST /v1/audio/translations` | Audio → English text (multipart upload) | Community |
 | `POST /v1/responses` | Intentionally unsupported — typed 501 pointing to chat | Community |
 | `POST /v1/feedback` | Attach a quality score to a request trace | Community |
+| `POST /v1/cache/purge` | Purge this authenticated tenant's exact-cache namespace(s) | Community |
 | `GET /v1/logs` | Recent request logs (your keys only) | Community |
 | `GET /analytics` + `/analytics/latency` | Recent usage events + latency percentiles | Community |
 | `GET /status` | Operational snapshot (no auth) | Community |
-| `GET /metrics` | Prometheus text exposition (no auth) | Community |
+| `GET /metrics` | Protected Prometheus text exposition (operator credential required by default) | Community |
 | `GET /healthz` | Liveness (no auth) | Community |
 | `GET /v1/prompts/{ref}` (+ `/render`, `/completions`) | Versioned prompt registry | Enterprise |
 | `POST /v1/mcp/tool-result/inspect` | Agentic security — inspect a tool result | Enterprise |

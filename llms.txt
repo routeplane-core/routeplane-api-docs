@@ -41,13 +41,18 @@ OpenAI-compatible inference (Community, open source):
 Observability & system (Community):
 
 - `POST /v1/feedback` — attach a quality score to a request trace (by `x-routeplane-trace-id`).
+- `POST /v1/cache/purge` — advance the authenticated canonical tenant's exact-cache purge generation, optionally for one namespace.
 - `GET /v1/logs` — recent request logs, scoped to your own keys.
 - `GET /analytics`, `GET /analytics/latency` — recent usage events + latency percentiles.
 - `GET /status` — operational snapshot (no auth).
-- `GET /metrics` — Prometheus text exposition (no auth).
+- `GET /metrics` — protected Prometheus text exposition (operator credential required by default).
 - `GET /healthz` — liveness probe (no auth).
 
 Enterprise (commercial):
+
+Semantic-cache machinery is evaluation-gated and fail-closed/dark until a
+production verifier is provisioned and the ADR-105 held-out plus
+production-shadow bars pass; entitlement alone does not arm answer serving.
 
 - `GET /v1/prompts/{ref}` (+ `/render`, `/completions`) — versioned prompt registry.
 - `POST /v1/mcp/tool-result/inspect` — agentic security: inspect a tool result before it re-enters the model context.

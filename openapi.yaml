@@ -50,9 +50,12 @@ info:
     * **Enterprise** (commercial): sovereign data-residency **enforcement**
       with the signed, hash-chained audit ledger and verifiable artifacts, the
       agentic-security (MCP) gateway and agent governance, advanced guardrails
-      (webhook/ML detectors), the semantic cache, the versioned prompt
+      (webhook/ML detectors), evaluation-gated semantic-cache machinery, the versioned prompt
       registry, FinOps export, durable telemetry retention, model-catalog
-      governance, and the multi-tenant control plane. Enterprise operations
+      governance, and the multi-tenant control plane. Semantic answer serving
+      additionally requires a provisioned production verifier and the ADR-105
+      held-out plus production-shadow acceptance evidence; entitlement alone
+      does not arm it. Enterprise operations
       are badged in this reference and are absent from the
       [Community Edition view](community.html).
 
@@ -148,8 +151,10 @@ tags:
     description: Multi-tenant admin API — organization settings and DNS-verified auto-join domains, served by the separate control-plane deployment (Enterprise)
   - name: Observability
     description: Usage analytics, request logs, latency percentiles, and feedback
+  - name: Cache
+    description: Tenant-authorized exact-cache lifecycle operations
   - name: System
-    description: Unauthenticated probes and operational surfaces
+    description: Liveness and operational surfaces (metrics are protected by default)
 
 paths:
   /v1/chat/completions:
@@ -903,6 +908,48 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /v1/cache/purge:
+    post:
+      tags: [Cache]
+      operationId: purgeResponseCache
+      x-routeplane-edition: community
+      summary: Purge this tenant's exact-response cache
+      description: |
+        Invalidates exact-cache entries for the authenticated virtual key's
+        explicit canonical tenant identity. An optional `namespace` purges one
+        namespace; an absent or empty body purges all namespaces for that tenant.
+        Tenant identity is never accepted from the request body. Invalid,
+        unknown, zero-share, or legacy display-name-only identities cannot purge
+        cache state. Purge is per replica; prior-generation entries become
+        unreachable immediately and age out under the bounded cache policy.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CachePurgeRequest' }
+      responses:
+        '200':
+          description: The tenant-scoped purge generation was advanced.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CachePurgeAck' }
+        '400':
+          description: '`namespace` does not match `[a-z0-9_-]{1,64}`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: The key has no explicit canonical cache-tenant authority.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429':
+          description: The bounded tenant purge-scope ceiling was reached.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
   /v1/prompts/{reference}:
     get:
       tags: [Prompts]
@@ -1636,12 +1683,13 @@ paths:
       tags: [System]
       operationId: metrics
       x-routeplane-edition: community
-      summary: Prometheus metrics (no auth)
-      security: []
+      summary: Protected Prometheus metrics
       description: |
         SRE metrics in the **Prometheus text exposition format**
         (`Content-Type: text/plain; version=0.0.4`) — not JSON. Metric
-        families (all lock-free atomic counters, reset on process restart):
+        Requires a dedicated operator metrics credential by default. Deployments
+        may explicitly opt out with `RP_METRICS_PUBLIC=on`; public exposure is
+        not the default. Families reset on process restart:
 
         * `rp_requests_total{provider, outcome}` — requests by provider and
           outcome (`success`, `error`, `residency_blocked`,
@@ -1652,6 +1700,15 @@ paths:
         * `rp_cost_micro_usd_total` — attributed upstream cost in micro-USD.
         * `rp_cache_events_total{type, result}` — cache lookups (`exact` /
           `semantic` by result).
+        * `rp_telemetry_dropped_total{record, reason}` — aggregate bounded-plane
+          drops using a closed label vocabulary.
+        * `rp_semantic_cache_capacity{measure}` — enterprise replica aggregate
+          slots and tenant-share posture; never tenant-labelled.
+        * `rp_semantic_cache_verifier_ready` — 1 only when the production
+          verifier is provisioned; 0 is the fail-closed dark posture.
+        * `rp_semantic_cache_insert_dropped_total{reason}` and
+          `rp_semantic_cache_verification_{admission,runtime}_total{outcome}` —
+          fixed-vocabulary closed-admission outcomes.
         * `rp_provider_errors_total{provider}` — failed upstream attempts.
         * `rp_hedged_wins_total` — responses served by a speculative hedge.
         * `rp_shed_total` — cumulative capacity sheds (also mirrored under the
@@ -1659,7 +1716,7 @@ paths:
 
         Label cardinality is bounded (the `provider` label collapses unknown
         values to `other`); labels never carry tenant, key, model, or content
-        — which is what makes the endpoint safe to serve unauthenticated.
+        — and the endpoint remains operator-authenticated by default.
       responses:
         '200':
           description: Prometheus text exposition.
@@ -2197,6 +2254,10 @@ components:
         path to saved chains); `mode: semantic` additionally requires the
         semantic-cache entitlement (it degrades loudly via
         `x-routeplane-cache-degraded` otherwise).
+        Entitlement/release alone never authorizes a semantic hit: production
+        verifier readiness plus the ADR-105 held-out and production-shadow
+        acceptance bars are also required. Until then semantic serving remains
+        fail-closed/dark and falls through to the live provider.
     Metadata:
       name: x-routeplane-metadata
       in: header
@@ -3036,6 +3097,29 @@ components:
         p95_ms: { type: integer }
         p99_ms: { type: integer }
         max_ms: { type: integer }
+    CachePurgeRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        namespace:
+          type: string
+          pattern: '^[a-z0-9_-]{1,64}$'
+          description: Exact-cache namespace to invalidate. Omit the body or field to purge all namespaces for the authenticated tenant.
+    CachePurgeAck:
+      type: object
+      required: [purged, tenant, namespace, generation]
+      properties:
+        purged: { type: boolean, const: true }
+        tenant:
+          type: string
+          description: The authenticated canonical tenant identity whose purge generation advanced.
+        namespace:
+          type: ['string', 'null']
+          description: The purged namespace, or null for a tenant-wide purge.
+        generation:
+          type: integer
+          minimum: 1
+          description: New replica-local purge generation for the selected scope.
     StatusSnapshot:
       type: object
       properties:
@@ -3062,6 +3146,18 @@ components:
             approx_bytes: { type: integer }
             oversize_drops: { type: integer }
             write_drops: { type: integer }
+            tenant_count:
+              type: integer
+              description: Canonical tenant identities in the immutable cache authority registry.
+            storage_budget_bytes:
+              type: integer
+              description: Fixed response-storage envelope after bounded writer admission is reserved.
+            queued_bytes:
+              type: integer
+              description: Aggregate bytes currently admitted to tenant-local write lanes.
+            min_effective_entry_bytes:
+              type: integer
+              description: Smallest positive tenant response-entry ceiling under the current capacity plan.
         usage:
           type: object
           description: Non-sensitive aggregate of the recent usage ring (window size, success/failure counts, per-provider counts) — no keys, models, or content.
