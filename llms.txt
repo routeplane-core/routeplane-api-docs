@@ -41,13 +41,19 @@ OpenAI-compatible inference (Community, open source):
 Observability & system (Community):
 
 - `POST /v1/feedback` — attach a quality score to a request trace (by `x-routeplane-trace-id`).
+- `POST /v1/cache/purge` — advance the authenticated canonical tenant's exact-cache purge generation, optionally for one namespace.
 - `GET /v1/logs` — recent request logs, scoped to your own keys.
 - `GET /analytics`, `GET /analytics/latency` — recent usage events + latency percentiles.
-- `GET /status` — operational snapshot (no auth).
-- `GET /metrics` — Prometheus text exposition (no auth).
+- `GET /status` — fixed liveness on managed Enterprise; operational snapshot in CE (no auth in both).
+- `GET /metrics` — dedicated operator credential on managed Enterprise; unauthenticated aggregate metrics in CE.
 - `GET /healthz` — liveness probe (no auth).
 
 Enterprise (commercial):
+
+Production currently has no provisioned semantic verifier, so candidates fail
+closed to the live provider. Separately, release policy prohibits arming
+semantic capabilities until the ADR-105 held-out and production-shadow bars
+pass; entitlement alone does not arm answer serving.
 
 - `GET /v1/prompts/{ref}` (+ `/render`, `/completions`) — versioned prompt registry.
 - `POST /v1/mcp/tool-result/inspect` — agentic security: inspect a tool result before it re-enters the model context.
@@ -71,7 +77,7 @@ Enterprise (commercial):
 - `x-routeplane-idempotency-key` — idempotency key for safe retries (standard `Idempotency-Key` also accepted).
 - `x-routeplane-cohort` — explicit A/B cohort key for prompt-variant selection.
 
-Useful response headers include `x-routeplane-provider` (which provider served it), `x-routeplane-trace-id` (correlation id for `POST /v1/feedback`), and `x-routeplane-cache` (`hit`/`miss`/`bypass`/`semantic-hit`).
+Useful response headers include `x-routeplane-provider` (which provider served it), `x-routeplane-trace-id` (correlation id for `POST /v1/feedback`), and `x-routeplane-cache` (`hit`/`miss`/`refreshed`/`bypass`; managed Enterprise may additionally emit `semantic-hit` only after its verifier/evaluation gates are armed). CE never emits `semantic-hit`.
 
 ## Errors
 

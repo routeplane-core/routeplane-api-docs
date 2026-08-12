@@ -50,9 +50,12 @@ info:
     * **Enterprise** (commercial): sovereign data-residency **enforcement**
       with the signed, hash-chained audit ledger and verifiable artifacts, the
       agentic-security (MCP) gateway and agent governance, advanced guardrails
-      (webhook/ML detectors), the semantic cache, the versioned prompt
+      (webhook/ML detectors), evaluation-gated semantic-cache machinery, the versioned prompt
       registry, FinOps export, durable telemetry retention, model-catalog
-      governance, and the multi-tenant control plane. Enterprise operations
+      governance, and the multi-tenant control plane. Production currently has
+      no provisioned semantic verifier, so candidates fail closed; release
+      policy separately prohibits arming until the ADR-105 held-out and
+      production-shadow evidence passes. Enterprise operations
       are badged in this reference and are absent from the
       [Community Edition view](community.html).
 
@@ -114,11 +117,11 @@ info:
     Under capacity pressure the gateway fast-fails with **503** plus
     `x-routeplane-shed: capacity` and `Retry-After`, to protect the P99 tail —
     distinct from a client-quota **429**. Shed counts are exposed at
-    `GET /metrics` (Prometheus) and `GET /status`.
+    `GET /metrics` (Prometheus).
 
     ---
-    This document tracks gateway release **v0.1.32** and is verified against
-    the shipped surface.
+    Version **v0.1.32** is the most recent tagged baseline. Additive contract
+    changes may follow merged gateway implementations before the next tag.
   contact:
     name: Routeplane
     url: https://routeplane.ai
@@ -148,8 +151,10 @@ tags:
     description: Multi-tenant admin API — organization settings and DNS-verified auto-join domains, served by the separate control-plane deployment (Enterprise)
   - name: Observability
     description: Usage analytics, request logs, latency percentiles, and feedback
+  - name: Cache
+    description: Tenant-authorized exact-cache lifecycle operations
   - name: System
-    description: Unauthenticated probes and operational surfaces
+    description: Liveness and operational surfaces (metrics are protected by default)
 
 paths:
   /v1/chat/completions:
@@ -903,6 +908,48 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /v1/cache/purge:
+    post:
+      tags: [Cache]
+      operationId: purgeResponseCache
+      x-routeplane-edition: community
+      summary: Purge this tenant's response-cache generations
+      description: |
+        Invalidates exact- and semantic-cache generations for the authenticated virtual key's
+        explicit canonical tenant identity. An optional `namespace` purges one
+        namespace; an absent or empty body purges all namespaces for that tenant.
+        Tenant identity is never accepted from the request body. Invalid,
+        unknown or legacy display-name-only identities cannot purge
+        cache state. Purge is per replica; prior-generation entries become
+        unreachable immediately and age out under the bounded cache policy.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CachePurgeRequest' }
+      responses:
+        '200':
+          description: The tenant-scoped purge generation was advanced.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CachePurgeAck' }
+        '400':
+          description: '`namespace` does not match `[a-z0-9_-]{1,64}`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: The key has no explicit canonical cache-tenant authority.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429':
+          description: The bounded tenant purge-scope ceiling was reached.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
   /v1/prompts/{reference}:
     get:
       tags: [Prompts]
@@ -1587,18 +1634,15 @@ paths:
       tags: [System]
       operationId: getStatus
       x-routeplane-edition: community
-      summary: Platform status snapshot (no auth)
+      summary: Fixed liveness status (no auth)
       security: []
       description: |
-        Read-only operational snapshot: per-provider circuit-breaker state and
-        latency EWMA, response-cache statistics, the cumulative capacity-shed
-        count, and a non-sensitive aggregate of recent usage. Carries only
-        aggregate operational state — no keys, tenant ids, bodies, or PII —
-        which is what makes it safe to serve unauthenticated (like
-        `/healthz`).
+        Fixed, content-free liveness document. Fleet counters, provider state,
+        cache posture, and tenant/resource aggregates are available only on the
+        dedicated operator-authenticated `/metrics` surface.
       responses:
         '200':
-          description: The status snapshot.
+          description: Fixed liveness document.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/StatusSnapshot' }
@@ -1636,12 +1680,16 @@ paths:
       tags: [System]
       operationId: metrics
       x-routeplane-edition: community
-      summary: Prometheus metrics (no auth)
-      security: []
+      summary: Operator-authenticated Prometheus metrics
+      security:
+        - MetricsApiKey: []
+        - MetricsBearer: []
       description: |
         SRE metrics in the **Prometheus text exposition format**
-        (`Content-Type: text/plain; version=0.0.4`) — not JSON. Metric
-        families (all lock-free atomic counters, reset on process restart):
+        (`Content-Type: text/plain; version=0.0.4`) — not JSON.
+        Requires a currently valid credential from the dedicated metrics
+        credential plane. Ordinary tenant keys never authorize this endpoint.
+        Families reset on process restart:
 
         * `rp_requests_total{provider, outcome}` — requests by provider and
           outcome (`success`, `error`, `residency_blocked`,
@@ -1652,6 +1700,15 @@ paths:
         * `rp_cost_micro_usd_total` — attributed upstream cost in micro-USD.
         * `rp_cache_events_total{type, result}` — cache lookups (`exact` /
           `semantic` by result).
+        * `rp_telemetry_dropped_total{record, reason}` — aggregate bounded-plane
+          drops using a closed label vocabulary.
+        * `rp_semantic_cache_capacity{measure}` — enterprise replica aggregate
+          slots and tenant-share posture; never tenant-labelled.
+        * `rp_semantic_cache_verifier_ready` — 1 only when the production
+          verifier is provisioned; 0 is the fail-closed dark posture.
+        * `rp_semantic_cache_insert_dropped_total{reason}` and
+          `rp_semantic_cache_verification_{admission,runtime}_total{outcome}` —
+          fixed-vocabulary closed-admission outcomes.
         * `rp_provider_errors_total{provider}` — failed upstream attempts.
         * `rp_hedged_wins_total` — responses served by a speculative hedge.
         * `rp_shed_total` — cumulative capacity sheds (also mirrored under the
@@ -1659,7 +1716,7 @@ paths:
 
         Label cardinality is bounded (the `provider` label collapses unknown
         values to `other`); labels never carry tenant, key, model, or content
-        — which is what makes the endpoint safe to serve unauthenticated.
+        — and the endpoint remains operator-authenticated by default.
       responses:
         '200':
           description: Prometheus text exposition.
@@ -1674,6 +1731,7 @@ paths:
                   rp_shed_total 0
                   # TYPE shed_total counter
                   shed_total 0
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/v1/tenants/{id}/org-settings:
     servers:
@@ -2012,6 +2070,15 @@ components:
         header stock OpenAI SDKs send). Only `rp_`-prefixed gateway keys are
         accepted; a provider key (`sk-…`, …) in this header is rejected with
         401 and is never forwarded upstream.
+    MetricsApiKey:
+      type: apiKey
+      in: header
+      name: x-routeplane-api-key
+      description: Dedicated, currently valid operator metrics credential. Ordinary tenant virtual keys are rejected.
+    MetricsBearer:
+      type: http
+      scheme: bearer
+      description: Dedicated operator metrics credential in the OpenAI-compatible Bearer header form.
     ControlPlaneBearer:
       type: http
       scheme: bearer
@@ -2197,6 +2264,10 @@ components:
         path to saved chains); `mode: semantic` additionally requires the
         semantic-cache entitlement (it degrades loudly via
         `x-routeplane-cache-degraded` otherwise).
+        Production currently has no provisioned verifier, so verification is
+        fail-closed and semantic candidates fall through to the live provider.
+        Separately, release policy prohibits arming semantic capabilities until
+        the ADR-105 held-out and production-shadow acceptance bars pass.
     Metadata:
       name: x-routeplane-metadata
       in: header
@@ -3036,36 +3107,35 @@ components:
         p95_ms: { type: integer }
         p99_ms: { type: integer }
         max_ms: { type: integer }
+    CachePurgeRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        namespace:
+          type: string
+          pattern: '^[a-z0-9_-]{1,64}$'
+          description: Response-cache namespace whose shared exact-and-semantic purge generation advances. Omit the body or field to purge all namespaces for the authenticated tenant.
+    CachePurgeAck:
+      type: object
+      required: [purged, tenant, namespace, generation]
+      properties:
+        purged: { type: boolean, const: true }
+        tenant:
+          type: string
+          description: The authenticated canonical tenant identity whose purge generation advanced.
+        namespace:
+          type: ['string', 'null']
+          description: The purged namespace, or null for a tenant-wide purge.
+        generation:
+          type: integer
+          minimum: 1
+          description: New replica-local purge generation for the selected scope.
     StatusSnapshot:
       type: object
+      required: [status]
+      additionalProperties: false
       properties:
-        shed_total:
-          type: integer
-          description: Cumulative capacity sheds since process start.
-        providers:
-          type: array
-          items:
-            type: object
-            properties:
-              provider: { type: string }
-              circuit: { type: string, enum: [closed, half_open, open] }
-              latency_ewma_ms:
-                type: ['number', 'null']
-                description: Latency EWMA in ms — null until the first sample.
-        cache:
-          type: object
-          properties:
-            hits: { type: integer }
-            misses: { type: integer }
-            hit_rate: { type: number }
-            entries: { type: integer }
-            approx_bytes: { type: integer }
-            oversize_drops: { type: integer }
-            write_drops: { type: integer }
-        usage:
-          type: object
-          description: Non-sensitive aggregate of the recent usage ring (window size, success/failure counts, per-provider counts) — no keys, models, or content.
-          additionalProperties: true
+        status: { type: string, const: ok }
     StoredPromptVersion:
       type: object
       properties:

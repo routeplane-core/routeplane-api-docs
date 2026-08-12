@@ -1,8 +1,8 @@
 # Routeplane AI Gateway — Full API Reference (for LLMs)
 
-> Routeplane is a neutral, multi-provider AI Gateway — an SRE-grade, OpenAI-compatible proxy in one Rust binary, in front of 15 LLM providers. This file is the long-form, machine-readable reference: every endpoint with its headers, request fields, response shape, and status codes. It is generated from the OpenAPI 3.1 contract (`openapi.yaml`, gateway release v0.1.32) rendered at https://docs.routeplane.ai. For a short overview see `llms.txt`.
+> Routeplane is a neutral, multi-provider AI Gateway — an SRE-grade, OpenAI-compatible proxy in one Rust binary, in front of 15 LLM providers. This file is the long-form, machine-readable reference: every endpoint with its headers, request fields, response shape, and status codes. It is maintained alongside the OpenAPI 3.1 contract (`openapi.yaml`; v0.1.32 is the most recent tagged baseline) rendered at https://docs.routeplane.ai. For a short overview see `llms.txt`.
 
-This document tracks the shipped surface. Community operations are open source (Apache-2.0); Enterprise operations are commercial and are absent from the Community Edition view (https://docs.routeplane.ai/community.html).
+This document tracks merged gateway contracts; v0.1.32 is the most recent tagged baseline and additive changes may precede the next tag. Community operations are open source (Apache-2.0); Enterprise operations are commercial and are absent from the Community Edition view (https://docs.routeplane.ai/community.html).
 
 ---
 
@@ -15,7 +15,7 @@ Present a Routeplane virtual key (`rp_`-prefixed). Two equivalent forms, resolve
 
 Provider credentials are resolved server-side from the virtual key; clients never send provider keys. Missing/invalid credentials → `401` with the OpenAI error envelope (`code: invalid_api_key`). A suspended/closed tenant returns the same envelope (no existence/state leak).
 
-The unauthenticated routes are `GET /status`, `GET /metrics`, `GET /healthz`, and `GET /`.
+`GET /status`, `GET /healthz`, and `GET /` are unauthenticated. Managed Enterprise requires a separate, currently valid operator credential for `GET /metrics`; ordinary tenant keys never authorize it. CE exposes aggregate-only `GET /metrics` without authentication.
 
 ## Base URLs
 
@@ -63,7 +63,7 @@ When a request carries regulated personal data (detected by the gateway's classi
 
 - `x-routeplane-provider` — the provider that served the response.
 - `x-routeplane-trace-id` (alias `x-routeplane-request-id`) — per-request correlation id (`req_<uuid>`); reference it in `POST /v1/feedback`.
-- `x-routeplane-cache` — cache verdict: `hit` | `miss` | `refreshed` | `semantic-hit` | `bypass`.
+- `x-routeplane-cache` — cache verdict: `hit` | `miss` | `refreshed` | `bypass`; managed Enterprise may additionally emit `semantic-hit` only after its verifier/evaluation gates are armed. CE never emits `semantic-hit`.
 - `x-routeplane-hedged` — present when a speculative hedge won.
 - `x-routeplane-idempotent-replayed: true` — response replayed from a recorded idempotent result.
 - `x-routeplane-pii-masked` — count of inbound parts the always-on ingress redact masked (present only when ≥ 1).
@@ -189,6 +189,18 @@ Portkey-compatible. `trace_id` is the `x-routeplane-trace-id` from a prior compl
 
 Request (`FeedbackRequest`), required `trace_id` + `value`: `value` (int −10..10), `weight` (0.0..1.0, default 1.0), `metadata`. Response `200`: `{status:"recorded",trace_id}`. Statuses: `200`, `400`, `401`.
 
+## POST /v1/cache/purge — Purge this tenant's response-cache generations [Community]
+
+Advances the authenticated key's explicit canonical tenant purge generation.
+This invalidates exact-cache entries in both editions and the shared semantic
+generation in managed Enterprise. Body is optional: `{ "namespace": "support" }`
+purges one namespace; an absent body purges all tenant namespaces. Tenant
+identity is never accepted from the body. Invalid namespace → `400`; missing or
+legacy-only tenant authority → `403`; bounded scope exhaustion → `429`.
+
+Response `200`: `{ purged:true, tenant, namespace, generation }`. Statuses:
+`200`, `400`, `401`, `403`, `429`.
+
 ## GET /v1/logs — Recent request logs (your keys only) [Community]
 
 The authenticated tenant's most-recent request-log rows (newest first, up to 200) from the in-memory ring (~1000 events). Tenant isolation is structural — scope is the caller's own virtual keys, resolved server-side; no client-supplied id selects scope. Rows are sanitized projections (labels, counts, outcomes — no content).
@@ -207,20 +219,25 @@ Exact nearest-rank percentiles (p50/p95/p99/max, ms) over timed provider attempt
 
 Response `200` (`LatencyReport`): `{ overall:{count,p50_ms,p95_ms,p99_ms,max_ms}, by_provider:{<provider>:{…}} }`. Statuses: `200`, `401`.
 
-## GET /status — Platform status snapshot (no auth) [Community]
+## GET /status — Edition-specific status (no auth) [Community]
 
-Read-only operational snapshot: per-provider circuit-breaker state + latency EWMA, response-cache stats, cumulative capacity-shed count, non-sensitive usage aggregate. No keys, tenant ids, bodies, or PII.
+Managed Enterprise returns the fixed, content-free liveness document
+`{"status":"ok"}`. CE returns a read-only operational snapshot with
+per-provider circuit-breaker state + latency EWMA, response-cache stats,
+cumulative capacity-shed count, and a non-sensitive usage aggregate. Neither
+edition returns keys, tenant ids, bodies, or PII.
 
-Response `200` (`StatusSnapshot`): `{ shed_total, providers[]:{provider,circuit (closed|half_open|open),latency_ewma_ms}, cache:{hits,misses,hit_rate,entries,approx_bytes,oversize_drops,write_drops}, usage{…} }`.
+CE response `200` (`StatusSnapshot`): `{ shed_total, providers[]:{provider,circuit (closed|half_open|open),latency_ewma_ms}, cache:{hits,misses,hit_rate,entries,approx_bytes,oversize_drops,write_drops,storage_budget_bytes,queued_bytes,min_effective_entry_bytes}, usage{…} }`. Managed Enterprise response: `{status:"ok"}`.
 
-## GET /metrics — Prometheus metrics (no auth) [Community]
+## GET /metrics — Prometheus metrics [Community]
 
-Prometheus text exposition (`Content-Type: text/plain; version=0.0.4`), not JSON. Lock-free atomic counters, reset on process restart:
+Prometheus text exposition (`Content-Type: text/plain; version=0.0.4`), not JSON. Managed Enterprise requires a dedicated, currently valid operator metrics credential; ordinary tenant keys are rejected. CE exposes its aggregate-only metrics without authentication. Lock-free atomic counters reset on process restart:
 - `rp_requests_total{provider,outcome}` — outcome ∈ `success|error|residency_blocked|guardrail_denied|rate_limited|budget_exceeded`.
 - `rp_request_duration_ms` — per-provider latency histogram (50 ms – 60 s buckets).
 - `rp_tokens_total` — prompt/completion/cached token counters.
 - `rp_cost_micro_usd_total` — attributed upstream cost (micro-USD).
 - `rp_cache_events_total{type,result}` — cache lookups (`exact`/`semantic`).
+- Managed Enterprise additionally exposes `rp_telemetry_dropped_total{record,reason}`, `rp_semantic_cache_capacity{measure}`, `rp_semantic_cache_verifier_ready`, `rp_semantic_cache_insert_dropped_total{reason}`, and `rp_semantic_cache_verification_{admission,runtime}_total{outcome}` as aggregate, closed-vocabulary series. Verifier readiness 0 is the fail-closed dark posture.
 - `rp_provider_errors_total{provider}`; `rp_hedged_wins_total`; `rp_shed_total` (deprecated unprefixed alias `shed_total`).
 
 Labels never carry tenant, key, model, or content; `provider` collapses unknown values to `other`.
@@ -232,6 +249,11 @@ Returns `200 OK` (plain text). `GET /` returns a plain-text service banner (no a
 ---
 
 # Enterprise endpoints
+
+Production currently has no provisioned semantic verifier, so candidates fail
+closed to the live provider. Separately, release policy prohibits arming
+semantic capabilities until the ADR-105 held-out and production-shadow bars
+pass. Entitlement alone does not arm semantic answer serving.
 
 ## GET /v1/prompts/{reference} — Fetch a stored prompt version [Enterprise]
 
