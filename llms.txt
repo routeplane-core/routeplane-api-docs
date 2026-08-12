@@ -50,9 +50,10 @@ Observability & system (Community):
 
 Enterprise (commercial):
 
-Semantic-cache machinery is evaluation-gated and fail-closed/dark until a
-production verifier is provisioned and the ADR-105 held-out plus
-production-shadow bars pass; entitlement alone does not arm answer serving.
+Production currently has no provisioned semantic verifier, so candidates fail
+closed to the live provider. Separately, release policy prohibits arming
+semantic capabilities until the ADR-105 held-out and production-shadow bars
+pass; entitlement alone does not arm answer serving.
 
 - `GET /v1/prompts/{ref}` (+ `/render`, `/completions`) — versioned prompt registry.
 - `POST /v1/mcp/tool-result/inspect` — agentic security: inspect a tool result before it re-enters the model context.

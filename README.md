@@ -42,8 +42,9 @@ carries the vendor extension `x-routeplane-edition: community | enterprise`:
   signed audit ledger, the agentic-security (MCP) gateway, advanced
   guardrails, evaluation-gated semantic-cache machinery, the prompt registry,
   FinOps export, and the multi-tenant control plane. Semantic answer serving is
-  not implied by entitlement: it remains dark until the production verifier is
-  provisioned and the ADR-105 held-out and production-shadow bars pass.
+  not implied by entitlement: production currently has no provisioned verifier,
+  so candidates fail closed. Separately, release policy prohibits arming until
+  the ADR-105 held-out and production-shadow bars pass.
 
 ## Quickstart
 

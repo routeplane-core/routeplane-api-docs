@@ -2,7 +2,7 @@
 
 > Routeplane is a neutral, multi-provider AI Gateway — an SRE-grade, OpenAI-compatible proxy in one Rust binary, in front of 15 LLM providers. This file is the long-form, machine-readable reference: every endpoint with its headers, request fields, response shape, and status codes. It is maintained alongside the OpenAPI 3.1 contract (`openapi.yaml`; v0.1.32 is the most recent tagged baseline) rendered at https://docs.routeplane.ai. For a short overview see `llms.txt`.
 
-This document tracks the shipped surface. Community operations are open source (Apache-2.0); Enterprise operations are commercial and are absent from the Community Edition view (https://docs.routeplane.ai/community.html).
+This document tracks merged gateway contracts; v0.1.32 is the most recent tagged baseline and additive changes may precede the next tag. Community operations are open source (Apache-2.0); Enterprise operations are commercial and are absent from the Community Edition view (https://docs.routeplane.ai/community.html).
 
 ---
 
@@ -250,10 +250,10 @@ Returns `200 OK` (plain text). `GET /` returns a plain-text service banner (no a
 
 # Enterprise endpoints
 
-Semantic-cache machinery is evaluation-gated and remains fail-closed/dark
-until the production verifier is provisioned and the ADR-105 held-out plus
-production-shadow acceptance bars pass. Entitlement alone does not arm
-semantic answer serving.
+Production currently has no provisioned semantic verifier, so candidates fail
+closed to the live provider. Separately, release policy prohibits arming
+semantic capabilities until the ADR-105 held-out and production-shadow bars
+pass. Entitlement alone does not arm semantic answer serving.
 
 ## GET /v1/prompts/{reference} — Fetch a stored prompt version [Enterprise]
 

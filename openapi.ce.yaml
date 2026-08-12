@@ -1,7 +1,5 @@
-# GENERATED — do not hand-edit. The Community Edition view of openapi.yaml:
-# every operation marked x-routeplane-edition: enterprise (and the Prompts /
-# Agentic-security tags) removed. Regenerate from openapi.yaml whenever it
-# changes (the filter lives in the repo README / launch tooling).
+# Manually maintained Community Edition mirror of openapi.yaml. Keep public
+# operation and schema changes synchronized deliberately during review.
 # Routeplane AI Gateway — public OpenAPI contract.
 #
 # Maintenance invariants (community.html depends on them):
@@ -54,10 +52,10 @@ info:
       agentic-security (MCP) gateway and agent governance, advanced guardrails
       (webhook/ML detectors), evaluation-gated semantic-cache machinery (not present in CE), the versioned prompt
       registry, FinOps export, durable telemetry retention, model-catalog
-      governance, and the multi-tenant control plane. Semantic answer serving
-      additionally requires a provisioned production verifier and the ADR-105
-      held-out plus production-shadow acceptance evidence; entitlement alone
-      does not arm it. Enterprise operations
+      governance, and the multi-tenant control plane. Production currently has
+      no provisioned semantic verifier, so candidates fail closed; release
+      policy separately prohibits arming until the ADR-105 held-out and
+      production-shadow evidence passes. Enterprise operations
       are badged in this reference and are absent from the
       [Community Edition view](community.html).
 
@@ -110,8 +108,8 @@ info:
     `GET /metrics` (Prometheus) and `GET /status`.
 
     ---
-    This document tracks gateway release **v0.1.32** and is verified against
-    the shipped surface.
+    Version **v0.1.32** is the most recent tagged baseline. Additive contract
+    changes may follow merged gateway implementations before the next tag.
   contact:
     name: Routeplane
     url: https://routeplane.ai
