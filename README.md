@@ -113,6 +113,18 @@ denials (HTTP 446), per-check results under `x_routeplane.check_results`.
 
 ## Contributing
 
+The optional `request_id` on `RequestLogRow` and `UsageEvent` matches the
+gateway-generated response request identifier. It is distinct from a log row's
+existing `id`; multiple retained attempts may share one request identifier.
+Legacy or uncorrelated events omit the field. This does not add a log detail
+endpoint or change bounded in-memory history, retention, or durability.
+
+Run the focused full/Community schema guard with Python's standard library:
+
+```sh
+python3 -B -m unittest discover -s tests -v
+```
+
 Issues and PRs are welcome. The contract rule: the spec documents **verified,
 shipped behavior only** — a spec change that adds or alters an endpoint must
 point at the gateway release that shipped it. For anything else, open an

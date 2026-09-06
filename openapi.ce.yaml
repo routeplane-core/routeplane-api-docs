@@ -1781,6 +1781,14 @@ components:
           type: string
           example: log_a41f9c02
           description: Synthesized stable id within a snapshot read.
+        request_id:
+          type: string
+          example: req_0123456789abcdef0123456789abcdef
+          description: >-
+            Gateway-generated request identifier matching the x-routeplane-request-id
+            and x-routeplane-trace-id response headers. Shared by retained attempts
+            for the same request; distinct from the log row id and caller, upstream,
+            or W3C trace identifiers. Omitted for legacy or uncorrelated events.
         timestamp: { type: string, format: date-time }
         virtual_key_name: { type: string }
         provider: { type: string }
@@ -1814,6 +1822,14 @@ components:
       type: object
       description: One usage event. Additive annotations (latency, cost, use-case labels, guardrail labels) may be present beyond the fields listed here.
       properties:
+        request_id:
+          type: string
+          example: req_0123456789abcdef0123456789abcdef
+          description: >-
+            Gateway-generated request identifier matching the x-routeplane-request-id
+            and x-routeplane-trace-id response headers. Shared by retained attempts
+            for the same request; distinct from the log row id and caller, upstream,
+            or W3C trace identifiers. Omitted for legacy or uncorrelated events.
         timestamp: { type: string, format: date-time }
         virtual_key_name: { type: string }
         provider: { type: string }
