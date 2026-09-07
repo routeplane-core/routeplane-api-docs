@@ -79,6 +79,146 @@ curl https://<gateway-host>/v1/chat/completions \
   -d '{"model":"fast-fallback","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
+## Inference → feedback with the official clients
+
+The Python example targets `routeplane==0.2.3`. The TypeScript
+`@routeplane/sdk@0.5.4` and `@routeplane/cli@0.5.4` examples describe the
+**release-candidate contract**: these npm versions have not yet been published.
+They are source-checked examples, not installed-package acceptance evidence;
+publication and verification against the delivered gateway and client artifacts
+remain required. Set
+`ROUTEPLANE_BASE_URL` to your gateway origin (for example,
+`https://<gateway-host>`, without `/v1`) and `ROUTEPLANE_API_KEY` to your
+gateway key. Replace `your-enabled-model` with a model enabled on that gateway.
+The Python client takes a `/v1` base URL; the TypeScript core client and CLI
+take the origin and append their endpoint paths.
+
+Use the **gateway-generated response** `x-routeplane-trace-id` (or its
+`x-routeplane-request-id` alias), not the completion body's `id`, an existing
+`log_...` row ID, a caller-supplied correlation value, or a W3C trace ID.
+When both response aliases are present they must agree. If no usable request
+identifier was returned, stop instead of inventing one.
+
+### Python
+
+The official client's `create_with_meta` returns the completion and its response
+metadata. The feedback helper is synchronous and returns `None` on success.
+
+```python
+import os
+from routeplane import Routeplane
+
+with Routeplane(
+    api_key=os.environ["ROUTEPLANE_API_KEY"],
+    base_url=os.environ["ROUTEPLANE_BASE_URL"].rstrip("/") + "/v1",
+) as client:
+    completion, meta = client.create_with_meta(
+        model="your-enabled-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        max_tokens=32,
+    )
+    request_id = meta.trace_id or meta.request_id
+    if not request_id:
+        raise RuntimeError("No gateway request identifier; feedback not sent")
+    if meta.trace_id and meta.request_id and meta.trace_id != meta.request_id:
+        raise RuntimeError("Gateway request identifier aliases disagree")
+    client.feedback.create(request_id=request_id, score=1)
+```
+
+With `AsyncRouteplane`, await `create_with_meta`, but **do not await
+`feedback.create`**: that helper is synchronous on both Python clients in 0.2.3.
+
+### TypeScript
+
+Use the official dependency-free core export; `postWithMeta` exposes the
+completion response headers. `feedback.create` resolves to `undefined`.
+
+```typescript
+import { RouteplaneCoreClient } from '@routeplane/sdk/core';
+
+const apiKey = process.env.ROUTEPLANE_API_KEY;
+const baseUrl = process.env.ROUTEPLANE_BASE_URL;
+if (!apiKey || !baseUrl) throw new Error('Set gateway URL and key');
+const client = new RouteplaneCoreClient({ apiKey, baseUrl, timeout: 30_000 });
+const response = await client.postWithMeta('/v1/chat/completions', {
+  model: 'your-enabled-model',
+  messages: [{ role: 'user', content: 'Hello' }],
+  max_tokens: 32,
+});
+const traceId = response.headers.get('x-routeplane-trace-id');
+const alias = response.headers.get('x-routeplane-request-id');
+const requestId = traceId ?? alias;
+if (!requestId) {
+  throw new Error('No gateway request identifier; feedback not sent');
+}
+if (traceId && alias && traceId !== alias) throw new Error('Gateway request identifier aliases disagree');
+await client.feedback.create({ requestId, score: 1 });
+```
+
+### CLI
+
+`rp chat` in 0.5.4 does not print the gateway request identifier; `--json`
+prints SSE chunk bodies, whose `id` is not a substitute. For a self-contained
+CLI feedback example, capture the completion response header with curl, then
+submit that identifier with the official `rp feedback` command. An identifier
+captured by either SDK above can also be supplied to `--request-id`.
+
+This Bash example requires curl 7.84.0 or newer for
+[`%header{...}`](https://curl.se/docs/manpage.html#-w). It discards the completion
+body, requires HTTP 200, and does not follow redirects.
+
+```bash
+set -euo pipefail
+: "${ROUTEPLANE_BASE_URL:?Set your gateway origin}"
+: "${ROUTEPLANE_API_KEY:?Set your gateway key}"
+response_meta="$(curl --disable --fail --silent --show-error --max-time 30 \
+  "${ROUTEPLANE_BASE_URL%/}/v1/chat/completions" \
+  --header "x-routeplane-api-key: $ROUTEPLANE_API_KEY" \
+  --header 'content-type: application/json' \
+  --data '{"model":"your-enabled-model","messages":[{"role":"user","content":"Hello"}],"max_tokens":32}' \
+  --output /dev/null \
+  --write-out '%{http_code}|%header{x-routeplane-trace-id}|%header{x-routeplane-request-id}')"
+IFS='|' read -r http_status request_id alias <<< "$response_meta"
+request_id="${request_id:-$alias}"
+[[ "$http_status" == 200 && -n "$request_id" ]] || {
+  echo 'No successful completion with a gateway request identifier; feedback not sent' >&2
+  exit 1
+}
+[[ -z "$alias" || "$alias" == "$request_id" ]] || {
+  echo 'Gateway request identifier aliases disagree' >&2
+  exit 1
+}
+rp feedback --request-id "$request_id" --score 1
+```
+
+### Shared feedback contract
+
+The ergonomic Python `request_id` / TypeScript `requestId` / CLI `--request-id`
+and `score` / `--score` arguments serialize to exactly this legacy request body:
+
+```json
+{"trace_id":"req_0123456789abcdef0123456789abcdef","value":1}
+```
+
+Scores are integers from **-10 through 10**, with no rescaling. Integral floats
+such as Python `1.0` and CLI `--score 1.0` are accepted and sent as JSON integers.
+Fractional, out-of-range, nonfinite, boolean, and nonnumeric SDK scores are
+rejected before dispatch. CLI scores are text: numeric `1` is valid, while
+empty, whitespace-only, fractional, nonfinite, and out-of-range values fail.
+
+Comments are unsupported. Omitted, `None` / `null`, or empty-string comments
+are omitted from the wire; every nonempty comment, including whitespace-only
+text, is rejected before dispatch. The CLI has no null-typed argument: omit
+`--comment`, or pass `--comment ''`. The helpers do not send `request_id`,
+`requestId`, `score`, or `comment` as wire fields.
+
+Successful calls acknowledge acceptance: Python returns `None`, TypeScript
+resolves to `undefined`, and the CLI reports **“Feedback acknowledged”** with
+exit status 0. Neither that acknowledgement nor a raw `{"status":"recorded"}`
+response proves target existence, durable storage, or retention. The optional
+`request_id` on log/usage rows is a correlation field, not a new log detail
+endpoint or a guarantee that the request remains in history.
+
 ## Surface at a glance
 
 | Endpoint | What it does | Edition |
