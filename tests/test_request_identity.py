@@ -53,6 +53,17 @@ class RequestIdentityTests(unittest.TestCase):
         for filename in ("openapi.yaml", "openapi.ce.yaml"):
             self.assertNotRegex((ROOT / filename).read_text(), r"(?m)^  /v1/logs/\{")
 
+    def test_compact_llm_reference_includes_optional_correlation(self):
+        text = (ROOT / "llms-full.txt").read_text()
+        logs = text.split("## GET /v1/logs", 1)[1].split("## GET /analytics", 1)[0]
+        analytics = text.split("## GET /analytics —", 1)[1].split("## GET /analytics/latency", 1)[0]
+        self.assertIn("{ id, request_id?, timestamp", logs)
+        self.assertIn("{ request_id?, timestamp", analytics)
+        for phrase in ("gateway-generated `req_...`", "distinct from a request-log row's `log_...` `id`",
+                       "Multiple retained attempt rows for one request may share it",
+                       "legacy or uncorrelated events omit it"):
+            self.assertIn(phrase, analytics)
+
 
 if __name__ == "__main__":
     unittest.main()

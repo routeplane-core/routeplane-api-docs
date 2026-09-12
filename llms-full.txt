@@ -205,13 +205,15 @@ Response `200`: `{ purged:true, tenant, namespace, generation }`. Statuses:
 
 The authenticated tenant's most-recent request-log rows (newest first, up to 200) from the in-memory ring (~1000 events). Tenant isolation is structural — scope is the caller's own virtual keys, resolved server-side; no client-supplied id selects scope. Rows are sanitized projections (labels, counts, outcomes — no content).
 
-Response `200`: `{ events: RequestLogRow[] }`; each row = `{ id, timestamp, virtual_key_name, provider, model, outcome (success|error|blocked), error?, prompt_tokens, completion_tokens, total_tokens, latency_ms, cost_micro_usd?, region, sovereign_routed, cache_status, guardrails[], use_case? }`. Statuses: `200`, `401`.
+Response `200`: `{ events: RequestLogRow[] }`; each row = `{ id, request_id?, timestamp, virtual_key_name, provider, model, outcome (success|error|blocked), error?, prompt_tokens, completion_tokens, total_tokens, latency_ms, cost_micro_usd?, region, sovereign_routed, cache_status, guardrails[], use_case? }`. Statuses: `200`, `401`.
 
 ## GET /analytics — Recent usage events (your keys only) [Community]
 
 Most-recent usage events from the in-memory ring (last 1000, process-local): successes, failures, sovereign blocks, guardrail denials, limit rejections — with token counts, provider, model, region, cache and routing-config annotations. Scoped to the caller's own keys.
 
-Response `200`: `UsageEvent[]` = `{ timestamp, virtual_key_name, provider, model, prompt_tokens, completion_tokens, total_tokens, region, sovereign_routed, success, error?, cache_status, config_ref, config_match?, prompt_id?, prompt_version?, latency_ms, use_case? }`. Statuses: `200`, `401`.
+Response `200`: `UsageEvent[]` = `{ request_id?, timestamp, virtual_key_name, provider, model, prompt_tokens, completion_tokens, total_tokens, region, sovereign_routed, success, error?, cache_status, config_ref, config_match?, prompt_id?, prompt_version?, latency_ms, use_case? }`. Statuses: `200`, `401`.
+
+`request_id` is the gateway-generated `req_...` correlation value. It is distinct from a request-log row's `log_...` `id`. Multiple retained attempt rows for one request may share it; legacy or uncorrelated events omit it.
 
 ## GET /analytics/latency — Latency percentiles [Community]
 
