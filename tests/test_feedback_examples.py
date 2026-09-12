@@ -117,12 +117,17 @@ class FeedbackExamplesTests(unittest.TestCase):
     def test_version_and_acknowledgement_boundaries_remain_explicit(self):
         text = section()
         for phrase in ("routeplane==0.2.3", "@routeplane/sdk@0.5.4", "@routeplane/cli@0.5.4",
-                       "release-candidate contract", "not yet been published", "not installed-package acceptance evidence",
+                       "0.5.4 publication workflow", "bounded installed-package check",
+                       "@routeplane/sdk/core", "It did not exercise the\nTypeScript root OpenAI subclass",
+                       "the MCP server", "complete API-10/API-11\nSDK suites",
                        "-10 through 10", "no rescaling", "whitespace-only", "before dispatch",
                        "synchronous on both Python clients", "returns `None`", "resolves to `undefined`",
                        "Feedback acknowledged", "proves target existence, durable storage, or retention",
                        "not a new log detail", "`log_...` row ID", "W3C trace ID"):
             self.assertIn(phrase, text)
+        for stale in ("release-candidate contract", "not yet been published",
+                      "not installed-package acceptance evidence"):
+            self.assertNotIn(stale, text)
 
 
 if __name__ == "__main__":

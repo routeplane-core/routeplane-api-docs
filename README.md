@@ -82,11 +82,15 @@ curl https://<gateway-host>/v1/chat/completions \
 ## Inference → feedback with the official clients
 
 The Python example targets `routeplane==0.2.3`. The TypeScript
-`@routeplane/sdk@0.5.4` and `@routeplane/cli@0.5.4` examples describe the
-**release-candidate contract**: these npm versions have not yet been published.
-They are source-checked examples, not installed-package acceptance evidence;
-publication and verification against the delivered gateway and client artifacts
-remain required. Set
+`@routeplane/sdk@0.5.4` and `@routeplane/cli@0.5.4` examples use the published
+npm packages from the successful
+[0.5.4 publication workflow](https://github.com/routeplane-core/routeplane-devtools/actions/runs/34699128126).
+A bounded installed-package check on 2026-09-12 used a deterministic synthetic
+upstream through the exact Community Edition v0.4.2 artifact and a separately
+pinned internal build. It exercised Python sync and async owner modes, the
+TypeScript `@routeplane/sdk/core` client, and the CLI. It did not exercise the
+TypeScript root OpenAI subclass, the MCP server, or the complete API-10/API-11
+SDK suites. Set
 `ROUTEPLANE_BASE_URL` to your gateway origin (for example,
 `https://<gateway-host>`, without `/v1`) and `ROUTEPLANE_API_KEY` to your
 gateway key. Replace `your-enabled-model` with a model enabled on that gateway.
