@@ -10,14 +10,12 @@
 #   * Enterprise operations also carry Redoc `x-badges`.
 openapi: 3.1.0
 info:
-  title: Routeplane AI Gateway API
+  title: Routeplane API
   version: 0.1.32
   description: |
-    **Routeplane** is a neutral, multi-provider AI Gateway — an SRE-grade,
-    OpenAI-compatible proxy in one Rust binary, in front of 15 providers, with
-    declarative routing, guardrails, budgets & rate limits, response caching,
-    and an enterprise upgrade path (sovereign data-residency routing, a
-    tamper-evident audit ledger, agentic security, and more).
+    Routeplane provides an OpenAI-compatible API for model requests. This
+    reference covers authentication, routing, guardrails, limits, caching,
+    telemetry, and the capabilities available in each edition.
 
     ## Authentication
     Two equivalent ways to present a Routeplane virtual key (`rp_`-prefixed):
