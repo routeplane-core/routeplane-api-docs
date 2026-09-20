@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <title>Routeplane AI Gateway — API Reference</title>
+    <title>Routeplane — API Reference</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="https://routeplane.ai/favicon.svg" type="image/svg+xml" />
@@ -31,6 +31,7 @@
         border: 1px solid rgba(255, 255, 255, 0.35);
         transition: border-color 0.15s, background 0.15s, color 0.15s;
       }
+      .rp-links a:focus-visible, .rp-brand:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
       .rp-links a:hover { border-color: #DBEAFE; background: rgba(255, 255, 255, 0.12); color: #DBEAFE; }
       .rp-links a.primary {
         border: none;
@@ -105,10 +106,18 @@
       /* boolean syntax token (true/false) in samples was a too-dark red on the near-black code bg */
       .token.boolean { color: #FCA5A5 !important; }
       @media (max-width: 700px) {
-        .rp-brand .section { display: none; }
+        .rp-brand > span { display: none; }
+        .rp-switch { margin-right: 0; }
+        .rp-links { gap: 4px; }
+        .rp-links a { padding: 7px 8px; font-size: 12px; }
         .rp-links a:not(.primary):not(.rp-switch a) { display: none; }
       }
+      @media (max-width: 360px) {
+        .rp-topbar { padding: 0 8px; }
+        .rp-brand { gap: 0; }
+      }
     </style>
+    <link rel="stylesheet" href="./visual.css" />
   </head>
   <body>
     <header class="rp-topbar">
@@ -140,8 +149,8 @@
       </a>
       <nav class="rp-links" aria-label="Routeplane">
         <span class="rp-switch" role="group" aria-label="Edition">
-          <a href="./index.html" class="active" aria-current="page">Full reference</a>
-          <a href="./community.html">Community Edition</a>
+          <a href="./index.html" class="active" aria-current="page" aria-label="Full API reference">Full</a>
+          <a href="./community.html" aria-label="Community Edition API reference">Community</a>
         </span>
         <a href="https://routeplane.ai/docs/" class="primary">Docs</a>
         <a href="https://routeplane.ai/">Home</a>

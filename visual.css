@@ -1,0 +1,31 @@
+/* ADR-219: Routeplane's shared blue/indigo/violet visual layer. */
+.rp-topbar {
+  background: linear-gradient(108deg, #102451 0%, #1d4ed8 43%, #4f46e5 76%, #6d28d9 100%);
+  border-bottom-color: rgba(199, 210, 254, .32);
+  box-shadow: 0 10px 32px -22px rgba(79, 70, 229, .85);
+}
+.rp-brand .dot { color: #c4b5fd; }
+.rp-brand .section { color: #e0e7ff; }
+.rp-links .rp-switch { background: rgba(12, 22, 50, .25); }
+.rp-links .rp-switch a.active {
+  background: linear-gradient(110deg, rgba(147, 197, 253, .28), rgba(196, 181, 253, .27));
+}
+.rp-links a.primary {
+  background: linear-gradient(125deg, #fff, #dbeafe 62%, #e9d5ff);
+  color: #1e3a8a;
+  box-shadow: 0 4px 15px -9px #0b1120;
+}
+.rp-links a.primary:hover { background: linear-gradient(125deg, #eff6ff, #c7d2fe 65%, #ddd6fe); }
+.rp-links a, .rp-links .rp-switch a {
+  transition: background 220ms cubic-bezier(.2,.8,.2,1), color 180ms ease, box-shadow 220ms ease, border-color 180ms ease;
+}
+body, redoc, .redoc-wrap { background: #10192c; }
+.api-content {
+  background: radial-gradient(56rem 45rem at 5% 0%, rgba(37, 99, 235, .13), transparent 75%),
+              radial-gradient(56rem 45rem at 100% 65%, rgba(124, 58, 237, .10), transparent 77%),
+              #131a2b;
+}
+.api-content table, .api-content pre, .api-content code { backdrop-filter: none; }
+@media (prefers-reduced-motion: reduce) {
+  .rp-links a, .rp-links .rp-switch a { transition-duration: .01ms !important; }
+}
