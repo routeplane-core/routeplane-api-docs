@@ -149,6 +149,10 @@ tags:
     description: Multi-tenant admin API — organization settings and DNS-verified auto-join domains, served by the separate control-plane deployment (Enterprise)
   - name: Observability
     description: Usage analytics, request logs, latency percentiles, and feedback
+  - name: FinOps
+    description: Estimated usage, cost attribution, and savings reads (Enterprise)
+  - name: Evaluations
+    description: Deterministic scoring, rubric discovery, and durable judge-score history (Enterprise)
   - name: Cache
     description: Tenant-authorized exact-cache lifecycle operations
   - name: System
@@ -863,6 +867,332 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '501':
           description: '`endpoint_not_supported` — use `POST /v1/chat/completions` instead.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /v1/finops/usage:
+    get:
+      tags: [FinOps]
+      operationId: getFinOpsUsage
+      x-routeplane-edition: enterprise
+      x-badges: [{name: Enterprise}]
+      summary: Read recent chargeback/showback usage
+      description: |
+        Tenant-scoped usage and gateway price-book cost estimates grouped by
+        model, virtual key, and optional `x-routeplane-use-case` label.
+
+        **Provenance:** this is a recent, process-local snapshot over the
+        gateway's bounded in-memory observability ring (roughly the last 1,000
+        events). It is not durable history, a provider invoice, or a reconciled
+        bill. Use `/v1/finops/usage/daily` for durable date-range history.
+      responses:
+        '200':
+          description: Recent process-local usage and estimated cost.
+          headers:
+            Cache-Control: { $ref: '#/components/headers/PrivateNoStore' }
+            Vary: { $ref: '#/components/headers/FinOpsVary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FinOpsUsageReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: The FinOps export capability is absent or held back.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /v1/finops/timeseries:
+    get:
+      tags: [FinOps]
+      operationId: getFinOpsTimeseries
+      x-routeplane-edition: enterprise
+      x-badges: [{name: Enterprise}]
+      summary: Read a recent usage/cost time series
+      description: |
+        Fixed-width buckets from the same bounded, process-local event ring as
+        `/v1/finops/usage`. `window_mins` and `buckets` are clamped server-side.
+        Empty leading buckets are emitted as zeroes; they do not imply durable
+        observation before the current process captured events. Costs are
+        estimates, not billed or reconciled amounts.
+      parameters:
+        - name: window_mins
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 1440, default: 60 }
+          description: Relative recent window in minutes (never an absolute date range).
+        - name: buckets
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 30 }
+      responses:
+        '200':
+          description: Recent process-local bucketed usage and estimated cost.
+          headers:
+            Cache-Control: { $ref: '#/components/headers/PrivateNoStore' }
+            Vary: { $ref: '#/components/headers/FinOpsVary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FinOpsTimeseries' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: The FinOps export capability is absent or held back.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /v1/finops/cache-savings:
+    get:
+      tags: [FinOps]
+      operationId: getFinOpsCacheSavings
+      x-routeplane-edition: enterprise
+      x-badges: [{name: Enterprise}]
+      summary: Read recent estimated cache savings
+      description: |
+        Tenant-scoped cache hits, participating lookups, tokens not re-sent,
+        and estimated avoided upstream spend over the bounded process-local
+        event ring. `saved_cost_micro_usd` is a recorded estimate, not billed
+        or reconciled savings.
+      parameters:
+        - name: window_mins
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 1440, default: 60 }
+      responses:
+        '200':
+          description: Recent process-local estimated cache savings.
+          headers:
+            Cache-Control: { $ref: '#/components/headers/PrivateNoStore' }
+            Vary: { $ref: '#/components/headers/FinOpsVary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FinOpsCacheSavings' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: The FinOps export capability is absent or held back.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /v1/finops/saver-metrics:
+    get:
+      tags: [FinOps]
+      operationId: getFinOpsSaverMetrics
+      x-routeplane-edition: enterprise
+      x-badges: [{name: Enterprise}]
+      summary: Read recent per-saver telemetry
+      description: |
+        Tenant-scoped recent cache metrics plus a `not_instrumented` map that
+        names promised saver families for which no honest aggregate exists.
+        Process-wide replica counters are deliberately not exposed to tenants.
+        Values come from the bounded in-memory ring and are estimates, not a
+        fleet-wide, billed, or reconciled savings statement.
+      parameters:
+        - name: window_mins
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 1440, default: 60 }
+      responses:
+        '200':
+          description: Recent tenant-scoped saver telemetry and explicit omissions.
+          headers:
+            Cache-Control: { $ref: '#/components/headers/PrivateNoStore' }
+            Vary: { $ref: '#/components/headers/FinOpsVary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FinOpsSaverMetrics' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: The FinOps export capability is absent or held back.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /v1/finops/usage/daily:
+    get:
+      tags: [FinOps]
+      operationId: getFinOpsDailyUsage
+      x-routeplane-edition: enterprise
+      x-badges: [{name: Enterprise}]
+      summary: Read durable daily usage and estimated cost
+      description: |
+        Durable UTC daily rollups over an inclusive date range. The gateway
+        folds hourly tenant/key/provider/model rows into daily rows and totals.
+        Only recorded days appear; history begins when durable telemetry was
+        armed and entitled. Monetary fields are integer gateway price-book
+        estimates only when the adjacent `pricing` evidence proves complete,
+        versioned coverage; otherwise they are `null` (never a fabricated zero).
+        A fully priced zero remains the numeric value `0`. These estimates are
+        not provider invoices or reconciled bills. Latency percentiles are
+        derived from fixed buckets and may be `null` when no sample exists.
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          description: Inclusive UTC start date. The server clamps the window to 92 days.
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          description: Inclusive UTC end date; future values are clamped to today.
+      responses:
+        '200':
+          description: Complete durable report envelope, including totals and provenance note.
+          headers:
+            Cache-Control: { $ref: '#/components/headers/PrivateNoStore' }
+            Vary: { $ref: '#/components/headers/FinOpsVary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FinOpsDailyUsageReport' }
+        '400':
+          description: Invalid date/range or a legacy tenant id that cannot be partitioned safely.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: FinOps export or durable telemetry is absent or held back.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429':
+          description: Per-tenant durable-read cap exceeded; includes `Retry-After`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '503':
+          description: The durable telemetry plane is not armed or cannot be read.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /v1/evaluations:
+    get:
+      tags: [Evaluations]
+      operationId: listEvaluations
+      x-routeplane-edition: enterprise
+      x-badges: [{name: Enterprise}]
+      summary: List durable judge-score history
+      description: |
+        Content-free judge/evaluation score rows from the durable telemetry
+        plane, newest first. The response summary covers only the returned,
+        capped rows, not the entire date window. Missing days mean no recorded
+        run; they are never zero-filled. Pass rate does not itself establish
+        agreement with human judgement.
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date }
+        - name: rubric
+          in: query
+          required: false
+          schema: { type: string, pattern: '^[a-z0-9_]{1,32}$' }
+        - name: judge_variant
+          in: query
+          required: false
+          schema: { type: string, pattern: '^[a-z0-9_]{1,32}$' }
+        - name: passed
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 10000, default: 1000 }
+      responses:
+        '200':
+          description: Durable evaluation rows and a summary of those returned rows.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvaluationsPage' }
+        '400':
+          description: Invalid date/range/filter or unsupported legacy tenant id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Evaluations or durable telemetry is absent or held back.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429':
+          description: Per-tenant evaluation-read cap exceeded; includes `Retry-After`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '503':
+          description: The durable telemetry plane is not armed or cannot be read.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /v1/evaluations/score:
+    post:
+      tags: [Evaluations]
+      operationId: scoreEvaluations
+      x-routeplane-edition: enterprise
+      x-badges: [{name: Enterprise}]
+      summary: Score cases deterministically
+      description: |
+        Run bounded deterministic string, JSON, and trajectory evaluators.
+        This endpoint makes no provider call, reads and writes no store, and
+        does not persist the result. Missing reference/trajectory inputs are
+        reported as skipped and excluded from rates and means.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EvaluationScoreRequest' }
+      responses:
+        '200':
+          description: Per-case deterministic scores and per-evaluator summary.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvaluationScoreResponse' }
+        '400':
+          description: Empty/oversized batch, oversized case, or invalid evaluator configuration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: The evaluations capability is absent or held back.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429':
+          description: Per-tenant evaluation cap exceeded; includes `Retry-After`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /v1/evaluations/rubrics:
+    get:
+      tags: [Evaluations]
+      operationId: listEvaluationRubrics
+      x-routeplane-edition: enterprise
+      x-badges: [{name: Enterprise}]
+      summary: List built-in judge rubrics
+      description: |
+        Read-only rubric discovery. This endpoint does not run a judge, call a
+        provider, or touch the telemetry store. Rubrics are consumed only by a
+        separately armed, operator-configured judge run.
+      responses:
+        '200':
+          description: Built-in rubric catalog and required template variables.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvaluationRubricCatalog' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: The evaluations capability is absent or held back.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
@@ -2364,6 +2694,12 @@ components:
       description: A declared domain (matched after trimming and lowercasing).
 
   headers:
+    PrivateNoStore:
+      description: Authenticated FinOps data is private and must not be stored by browsers or intermediaries.
+      schema: { type: string, const: 'private, no-store' }
+    FinOpsVary:
+      description: FinOps responses vary by every supported authentication mechanism.
+      schema: { type: string, const: 'authorization, x-routeplane-api-key, cookie' }
     XProvider:
       schema: { type: string }
       description: The provider that served the response (echoed on streamed responses).
@@ -2466,6 +2802,423 @@ components:
           schema: { $ref: '#/components/schemas/ControlPlaneError' }
 
   schemas:
+    FinOpsUsageTotals:
+      type: object
+      required: [requests, successful_requests, prompt_tokens, completion_tokens, total_tokens, cost_micro_usd, cost_by_currency]
+      properties:
+        requests: { type: integer, minimum: 0 }
+        successful_requests: { type: integer, minimum: 0 }
+        prompt_tokens: { type: integer, minimum: 0 }
+        completion_tokens: { type: integer, minimum: 0 }
+        total_tokens: { type: integer, minimum: 0 }
+        cost_micro_usd:
+          type: integer
+          minimum: 0
+          description: Gateway price-book estimate in integer millionths of a US dollar.
+        cost_by_currency:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+          description: ISO-4217 currency to integer minor units (for example INR to paise).
+    FinOpsLatencyPercentiles:
+      type: object
+      required: [count]
+      properties:
+        count: { type: integer, minimum: 0 }
+        p50_ms: { type: integer, minimum: 0 }
+        p95_ms: { type: integer, minimum: 0 }
+        p99_ms: { type: integer, minimum: 0 }
+        max_ms: { type: integer, minimum: 0 }
+      description: Percentiles are omitted when no upstream attempt was timed.
+    FinOpsUsageReport:
+      type: object
+      required: [tenant_id, window, events_matched, totals, by_model, by_key, latency]
+      properties:
+        tenant_id: { type: string }
+        window:
+          type: integer
+          minimum: 0
+          description: Rows retained in this process-local tenant sample.
+        events_matched: { type: integer, minimum: 0 }
+        totals: { $ref: '#/components/schemas/FinOpsUsageTotals' }
+        by_model:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/FinOpsUsageTotals' }
+        by_key:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/FinOpsUsageTotals' }
+        by_use_case:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/FinOpsUsageTotals' }
+          description: Omitted when no captured event carried `x-routeplane-use-case`.
+        latency: { $ref: '#/components/schemas/FinOpsLatencyPercentiles' }
+      description: Recent process-local estimates; not durable, billed, or reconciled.
+    FinOpsTimeseriesBucket:
+      type: object
+      required: [ts, requests, errors, cost_micro_usd, tokens, avg_latency_ms]
+      properties:
+        ts: { type: string, format: date-time, description: Bucket start. }
+        requests: { type: integer, minimum: 0 }
+        errors: { type: integer, minimum: 0 }
+        cost_micro_usd: { type: integer, minimum: 0 }
+        tokens: { type: integer, minimum: 0 }
+        avg_latency_ms: { type: integer, minimum: 0 }
+    FinOpsTimeseries:
+      type: object
+      required: [tenant_id, window_mins, window_secs, bucket_secs, total_events_in_window, buckets, note]
+      properties:
+        tenant_id: { type: string }
+        window_mins: { type: integer, minimum: 1, maximum: 1440 }
+        window_secs: { type: integer, minimum: 1 }
+        bucket_secs: { type: integer, minimum: 1 }
+        total_events_in_window: { type: integer, minimum: 0 }
+        buckets:
+          type: array
+          items: { $ref: '#/components/schemas/FinOpsTimeseriesBucket' }
+        note: { type: string }
+      description: Recent process-local estimates from the bounded event ring.
+    FinOpsCacheSavings:
+      type: object
+      required: [tenant_id, window_mins, cache_hits, cacheable_lookups, saved_cost_micro_usd, saved_tokens, note]
+      properties:
+        tenant_id: { type: string }
+        window_mins: { type: integer, minimum: 1, maximum: 1440 }
+        cache_hits: { type: integer, minimum: 0 }
+        cacheable_lookups: { type: integer, minimum: 0 }
+        saved_cost_micro_usd:
+          type: integer
+          minimum: 0
+          description: Estimated avoided upstream spend, not a billed saving.
+        saved_tokens: { type: integer, minimum: 0 }
+        note: { type: string }
+    FinOpsSaverCache:
+      type: object
+      required: [hits, misses, cacheable_lookups, hit_rate, saved_cost_micro_usd, saved_tokens]
+      properties:
+        hits: { type: integer, minimum: 0 }
+        misses: { type: integer, minimum: 0 }
+        cacheable_lookups: { type: integer, minimum: 0 }
+        hit_rate: { type: number, minimum: 0, maximum: 1 }
+        saved_cost_micro_usd: { type: integer, minimum: 0 }
+        saved_tokens: { type: integer, minimum: 0 }
+    FinOpsSaverMetrics:
+      type: object
+      required: [tenant_id, window_mins, tenant, not_instrumented]
+      properties:
+        tenant_id: { type: string }
+        window_mins: { type: integer, minimum: 1, maximum: 1440 }
+        tenant:
+          type: object
+          required: [cache, note]
+          properties:
+            cache: { $ref: '#/components/schemas/FinOpsSaverCache' }
+            note: { type: string }
+        not_instrumented:
+          type: object
+          additionalProperties: { type: string }
+          description: Saver key to the honest reason no aggregate is available.
+      description: Tenant-only recent estimates; no process-wide replica counters.
+    FinOpsPricingSource:
+      type: object
+      additionalProperties: false
+      required: [class, systems, schema_version]
+      properties:
+        class: { type: string, const: durable_rollup }
+        systems:
+          type: array
+          prefixItems:
+            - { type: string, const: telemetry_rung_1 }
+          minItems: 1
+          maxItems: 1
+        schema_version: { type: string, const: routeplane.finops.cost.v1 }
+    FinOpsPricingCoverage:
+      type: object
+      additionalProperties: false
+      required: [eligible_count, observed_count, priced_count, unpriced_count, invalid_pricing_count, versioned_priced_count, pricing_coverage_state, pricing_book_versions, pricing_book_versions_truncated, numeric_overflowed, missing_reasons]
+      properties:
+        eligible_count: { type: integer, minimum: 0 }
+        observed_count: { type: integer, minimum: 0 }
+        priced_count: { type: integer, minimum: 0 }
+        unpriced_count: { type: integer, minimum: 0 }
+        invalid_pricing_count: { type: integer, minimum: 0 }
+        versioned_priced_count: { type: integer, minimum: 0 }
+        pricing_coverage_state:
+          type: string
+          enum: [known, legacy_unknown, corrupt]
+        pricing_book_versions:
+          type: array
+          items: { type: string }
+        pricing_book_versions_truncated: { type: boolean }
+        numeric_overflowed: { type: boolean }
+        missing_reasons:
+          type: array
+          items: { type: string }
+    FinOpsPricingComponentCoverage:
+      type: object
+      additionalProperties: false
+      required: [input_output_split_available, inr_view_available]
+      properties:
+        input_output_split_available: { type: boolean }
+        inr_view_available: { type: boolean }
+    FinOpsPricingEvidence:
+      type: object
+      additionalProperties: false
+      required: [data_state, availability, value, unit, currency, scale, cost_status, source, coverage, component_coverage]
+      properties:
+        data_state:
+          type: string
+          enum: [live, partial, unavailable]
+        availability:
+          type: string
+          enum: [available, partial, unavailable]
+        value:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 9007199254740991
+          description: Canonical total in micro-USD, or null unless coverage is complete and versioned.
+        unit: { type: string, const: micro_currency }
+        currency: { type: string, const: USD }
+        scale: { type: integer, const: 6 }
+        cost_status:
+          type: string
+          enum: [estimated, unpriced, unavailable]
+        source: { $ref: '#/components/schemas/FinOpsPricingSource' }
+        coverage: { $ref: '#/components/schemas/FinOpsPricingCoverage' }
+        component_coverage: { $ref: '#/components/schemas/FinOpsPricingComponentCoverage' }
+      description: Fail-closed pricing evidence. An available value of 0 is a legitimate fully priced zero; null means no authoritative amount.
+    FinOpsDailyModelUsage:
+      type: object
+      required: [provider, model, requests, errors, total_tokens, cost_micro_usd, pricing]
+      properties:
+        provider: { type: string }
+        model: { type: string }
+        requests: { type: integer, minimum: 0 }
+        errors: { type: integer, minimum: 0 }
+        total_tokens: { type: integer, minimum: 0 }
+        cost_micro_usd:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 9007199254740991
+        pricing: { $ref: '#/components/schemas/FinOpsPricingEvidence' }
+    FinOpsDailyKeyUsage:
+      allOf:
+        - $ref: '#/components/schemas/FinOpsDailyModelUsage'
+        - type: object
+          required: [key, prompt_tokens, completion_tokens, cost_inr_paise]
+          properties:
+            key: { type: string }
+            prompt_tokens: { type: integer, minimum: 0 }
+            completion_tokens: { type: integer, minimum: 0 }
+            cost_inr_paise: { type: [integer, 'null'], minimum: 0, maximum: 9007199254740991 }
+    FinOpsDailyTotals:
+      type: object
+      required: [requests, errors, prompt_tokens, completion_tokens, total_tokens, cost_micro_usd, input_cost_micro_usd, output_cost_micro_usd, cost_inr_paise, pricing]
+      properties:
+        requests: { type: integer, minimum: 0 }
+        errors: { type: integer, minimum: 0 }
+        prompt_tokens: { type: integer, minimum: 0 }
+        completion_tokens: { type: integer, minimum: 0 }
+        total_tokens: { type: integer, minimum: 0 }
+        cost_micro_usd: { type: [integer, 'null'], minimum: 0, maximum: 9007199254740991 }
+        input_cost_micro_usd: { type: [integer, 'null'], minimum: 0, maximum: 9007199254740991 }
+        output_cost_micro_usd: { type: [integer, 'null'], minimum: 0, maximum: 9007199254740991 }
+        cost_inr_paise: { type: [integer, 'null'], minimum: 0, maximum: 9007199254740991 }
+        pricing: { $ref: '#/components/schemas/FinOpsPricingEvidence' }
+    FinOpsDailyUsage:
+      allOf:
+        - $ref: '#/components/schemas/FinOpsDailyTotals'
+        - type: object
+          required: [date, streaming, sovereign_routed, latency_ms, by_model, by_key]
+          properties:
+            date: { type: string, format: date }
+            streaming: { type: integer, minimum: 0 }
+            sovereign_routed: { type: integer, minimum: 0 }
+            latency_ms:
+              type: object
+              required: [p50, p95, p99]
+              properties:
+                p50: { type: [number, 'null'], minimum: 0 }
+                p95: { type: [number, 'null'], minimum: 0 }
+                p99: { type: [number, 'null'], minimum: 0 }
+            by_model:
+              type: array
+              items: { $ref: '#/components/schemas/FinOpsDailyModelUsage' }
+            by_key:
+              type: array
+              items: { $ref: '#/components/schemas/FinOpsDailyKeyUsage' }
+    FinOpsDailyUsageReport:
+      type: object
+      required: [tenant_id, from, to, days, totals, note]
+      properties:
+        tenant_id: { type: string }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        days:
+          type: array
+          items: { $ref: '#/components/schemas/FinOpsDailyUsage' }
+        totals: { $ref: '#/components/schemas/FinOpsDailyTotals' }
+        note: { type: string }
+      description: Durable recorded estimates with per-aggregate fail-closed pricing evidence; not a provider invoice or reconciled bill.
+    EvaluationHistoryRow:
+      type: object
+      required: [timestamp, region, rubric, judge_variant, passed, score, inference_id]
+      properties:
+        timestamp: { type: string, format: date-time }
+        region: { type: [string, 'null'] }
+        rubric: { type: string }
+        judge_variant: { type: string }
+        passed: { type: boolean }
+        score: { type: number }
+        inference_id: { type: string }
+    EvaluationRubricSummary:
+      type: object
+      required: [rubric, judge_variant, n, n_passed, mean_score]
+      properties:
+        rubric: { type: string }
+        judge_variant: { type: string }
+        n: { type: integer, minimum: 0 }
+        n_passed: { type: integer, minimum: 0 }
+        mean_score: { type: number }
+    EvaluationHistorySummary:
+      type: object
+      required: [n, n_passed, pass_rate, by_rubric]
+      properties:
+        n: { type: integer, minimum: 0 }
+        n_passed: { type: integer, minimum: 0 }
+        pass_rate: { type: number, minimum: 0, maximum: 1 }
+        by_rubric:
+          type: array
+          items: { $ref: '#/components/schemas/EvaluationRubricSummary' }
+    EvaluationsPage:
+      type: object
+      required: [tenant_id, from, to, rows, summary, note]
+      properties:
+        tenant_id: { type: string }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/EvaluationHistoryRow' }
+        summary: { $ref: '#/components/schemas/EvaluationHistorySummary' }
+        note: { type: string }
+    EvaluationToolCall:
+      type: object
+      required: [name, arguments]
+      properties:
+        name: { type: string }
+        arguments: { type: string, description: Raw JSON argument blob. }
+    EvaluationMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string }
+        content: { type: string }
+        tool_calls:
+          type: array
+          items: { $ref: '#/components/schemas/EvaluationToolCall' }
+    EvaluationScoreCase:
+      type: object
+      properties:
+        id: { type: string }
+        output: { type: string, maxLength: 10000 }
+        reference: { type: string, maxLength: 10000 }
+        trajectory:
+          type: array
+          items: { $ref: '#/components/schemas/EvaluationMessage' }
+        reference_trajectory:
+          type: array
+          items: { $ref: '#/components/schemas/EvaluationMessage' }
+    EvaluationEvaluatorSpec:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [exact_match, canonical_json_match, levenshtein_similarity, valid_json, contains, required_json_keys, json_match, trajectory_match]
+        threshold: { type: number, default: 0.9 }
+        needle: { type: string }
+        keys: { type: array, items: { type: string } }
+        exclude_keys: { type: array, items: { type: string } }
+        aggregator: { type: string, enum: [average, all], default: average }
+        list_match_mode: { type: string, enum: [same_elements, subset, superset, ordered], default: same_elements }
+        match_mode: { type: string, enum: [strict, unordered, subset, superset] }
+        tool_args_match_mode: { type: string, enum: [exact, ignore, subset, superset], default: exact }
+        overrides:
+          type: object
+          additionalProperties: true
+      description: Fields are interpreted according to `type`; missing fields required by that evaluator return 400.
+    EvaluationScoreRequest:
+      type: object
+      required: [cases, evaluators]
+      properties:
+        cases:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { $ref: '#/components/schemas/EvaluationScoreCase' }
+        evaluators:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items: { $ref: '#/components/schemas/EvaluationEvaluatorSpec' }
+    EvaluationScore:
+      type: object
+      required: [evaluator]
+      properties:
+        evaluator: { type: string }
+        passed: { type: boolean }
+        score: { type: number }
+        skipped: { type: boolean }
+        reason: { type: string, enum: [missing_reference, missing_trajectory] }
+      description: A scored result carries `passed` and `score`; a skipped result carries `skipped` and `reason`.
+    EvaluationCaseResult:
+      type: object
+      required: [case_id, scores]
+      properties:
+        case_id: { type: string }
+        scores:
+          type: array
+          items: { $ref: '#/components/schemas/EvaluationScore' }
+    EvaluationEvaluatorSummary:
+      type: object
+      required: [evaluator, n, n_passed, n_skipped, pass_rate, mean_score]
+      properties:
+        evaluator: { type: string }
+        n: { type: integer, minimum: 0 }
+        n_passed: { type: integer, minimum: 0 }
+        n_skipped: { type: integer, minimum: 0 }
+        pass_rate: { type: number, minimum: 0, maximum: 1 }
+        mean_score: { type: number }
+    EvaluationScoreResponse:
+      type: object
+      required: [results, summary, note]
+      properties:
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/EvaluationCaseResult' }
+        summary:
+          type: object
+          required: [by_evaluator]
+          properties:
+            by_evaluator:
+              type: array
+              items: { $ref: '#/components/schemas/EvaluationEvaluatorSummary' }
+        note: { type: string }
+      description: Deterministic, non-persisted scores; skipped checks are excluded from rates and means.
+    EvaluationRubric:
+      type: object
+      required: [code, category, variables]
+      properties:
+        code: { type: string }
+        category: { type: string, enum: [quality, rag, safety, security, trajectory, conversation, image, voice] }
+        variables: { type: array, items: { type: string } }
+    EvaluationRubricCatalog:
+      type: object
+      required: [rubrics, note]
+      properties:
+        rubrics:
+          type: array
+          items: { $ref: '#/components/schemas/EvaluationRubric' }
+        note: { type: string }
     GatewayIdentity:
       type: object
       description: The calling key's resolved identity and capabilities.

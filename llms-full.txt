@@ -46,7 +46,8 @@ When a request carries regulated personal data (detected by the gateway's classi
 |---|---|---|
 | `x-routeplane-api-key` | `rp_...` | Virtual key (branded primary auth header). |
 | `x-routeplane-provider` | e.g. `openai,anthropic` | Provider or comma-separated fallback chain. Route-specific default. Overridden by sovereign routing. |
-| `x-routeplane-strategy` | `priority` (default), `weighted`, `cost`, `latency` | Candidate-ordering strategy. Superseded by a routing config. |
+| `x-routeplane-strategy` | `priority` (default), `weighted`, `cost`, `latency`, `round_robin`, `least_busy`, `canary` | Candidate-ordering strategy. Superseded by a routing config. |
+| `x-routeplane-canary-share-bps` | integer 0..10000 | Candidate share for `canary`, in basis points. Assignment is deterministic per virtual key and promotes the second provider; it is not a per-request random split. |
 | `x-routeplane-residency` | e.g. `IN` | Requested residency jurisdiction; hard region lock only when regulated data is present. Can narrow, never disable, the key default. |
 | `x-routeplane-config` | JSON envelope or `cfg_<id>` | `{"routing":{…},"guardrails":{…}}` (≤ 8 KiB) or a saved-config reference. Malformed/unknown sections → `400`. Enterprise. |
 | `x-routeplane-metadata` | JSON object (≤ 4 KiB) | Scalars addressable from routing conditions as `metadata.<key>`. |
@@ -182,6 +183,38 @@ Near-twin of transcriptions — identical multipart contract **except no `langua
 ## POST /v1/responses — Not supported (documented 501) [Community]
 
 The OpenAI Responses API is intentionally unsupported. Returns a typed `501` (`code: endpoint_not_supported`) directing to `POST /v1/chat/completions`. Authenticated like the rest of `/v1/*` (missing key → `401` first). Statuses: `401`, `501`.
+
+## GET /v1/finops/usage — Recent chargeback/showback [Enterprise]
+
+Tenant-scoped totals and groupings by model, virtual key, and optional `x-routeplane-use-case`. This is a recent, process-local snapshot over the bounded in-memory event ring, not durable history, a provider invoice, or a reconciled bill. Response `FinOpsUsageReport`: `{ tenant_id, window, events_matched, totals, by_model, by_key, by_use_case?, latency }`. Money is integer micro-USD plus local-currency minor units. Statuses: `200`, `401`, `403`.
+
+## GET /v1/finops/timeseries — Recent usage/cost buckets [Enterprise]
+
+Query: `window_mins` (1..1440, default 60), `buckets` (1..200, default 30). These select a relative recent window, never absolute dates. Response `FinOpsTimeseries`: `{ tenant_id, window_mins, window_secs, bucket_secs, total_events_in_window, buckets[], note }`; each bucket carries `{ ts, requests, errors, cost_micro_usd, tokens, avg_latency_ms }`. Source is the bounded process-local ring; costs are estimates, not billed or reconciled amounts. Statuses: `200`, `401`, `403`.
+
+## GET /v1/finops/cache-savings — Recent estimated cache savings [Enterprise]
+
+Query: `window_mins` (1..1440). Response `{ tenant_id, window_mins, cache_hits, cacheable_lookups, saved_cost_micro_usd, saved_tokens, note }`. `saved_cost_micro_usd` is recorded estimated avoided spend over the process-local ring, not a billed or reconciled saving. Statuses: `200`, `401`, `403`.
+
+## GET /v1/finops/saver-metrics — Recent saver telemetry [Enterprise]
+
+Query: `window_mins` (1..1440). Response `{ tenant_id, window_mins, tenant:{cache,note}, not_instrumented }`. `not_instrumented` names savers for which no honest aggregate exists. Process-wide replica counters are deliberately absent. Values are recent process-local estimates. Statuses: `200`, `401`, `403`.
+
+## GET /v1/finops/usage/daily — Durable daily estimated usage [Enterprise]
+
+Query: inclusive UTC `from`/`to` dates; the server clamps to 92 days. Response `FinOpsDailyUsageReport`: `{ tenant_id, from, to, days[], totals, note }`. Each day carries token/cost totals, nullable bucket-derived latency percentiles, and `by_model`/`by_key` rows. Only recorded days appear. This is durable telemetry, but cost remains a gateway price-book estimate — not a provider invoice or reconciled bill. Statuses: `200`, `400`, `401`, `403`, `429`, `503`.
+
+## GET /v1/evaluations — Durable judge-score history [Enterprise]
+
+Query: `from`, `to`, `rubric`, `judge_variant`, `passed`, `limit`; event-scan windows clamp to 31 days. Response `EvaluationsPage`: `{ tenant_id, from, to, rows[], summary, note }`. Rows are content-free and newest first. The summary covers only returned rows, so a capped response does not summarize the whole window; missing days are absent rather than zero-filled. Statuses: `200`, `400`, `401`, `403`, `429`, `503`.
+
+## POST /v1/evaluations/score — Deterministic scoring [Enterprise]
+
+Body: `{ cases[1..200], evaluators[1..20] }`. Evaluators cover exact/canonical JSON, Levenshtein, valid JSON, contains, required keys, structured JSON, and tool-trajectory comparisons. Response `{ results, summary:{by_evaluator}, note }`. The endpoint makes no provider call, reads/writes no store, and persists nothing. Missing reference/trajectory inputs are skipped and excluded from rates/means. Statuses: `200`, `400`, `401`, `403`, `429`.
+
+## GET /v1/evaluations/rubrics — Built-in judge rubrics [Enterprise]
+
+Response `{ rubrics[]:{code,category,variables}, note }`. Discovery only: it does not run a judge, call a provider, or touch telemetry. Rubrics are used by separately armed operator-configured runs. Statuses: `200`, `401`, `403`.
 
 ## POST /v1/feedback — Attach a quality score to a request trace [Community]
 
