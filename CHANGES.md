@@ -43,6 +43,17 @@ PR only — do not publish it.
 
 ### Added — paths (all verified against `main.rs` route wiring + handlers)
 
+Enterprise FinOps and evaluations (verified again against the current route
+wiring and handlers on 2026-09-24):
+
+- `GET /v1/finops/{usage,timeseries,cache-savings,saver-metrics}` — typed,
+  explicitly recent/process-local estimated reads.
+- `GET /v1/finops/usage/daily` — the complete durable report envelope, with
+  totals and an explicit estimated-not-invoiced provenance boundary.
+- `GET /v1/evaluations`, `POST /v1/evaluations/score`, and
+  `GET /v1/evaluations/rubrics` — durable history, deterministic non-persisted
+  scoring, and discovery-only rubric catalog respectively.
+
 Community (the CE Bundle A surface):
 
 - `POST /v1/messages` — native Anthropic surface incl. the documented
@@ -112,8 +123,8 @@ Also updated `/analytics` prose: it is now tenant-scoped by key ownership
 ### Edition markers + scrubs
 
 - Every operation now carries `x-routeplane-edition: community | enterprise`
-  (26 ops: 20 community, 6 enterprise). The 6 enterprise ops (3 prompts, 3
-  MCP) also carry Redoc `x-badges: [{name: Enterprise}]`.
+  (54 ops: 22 community, 32 enterprise). Enterprise operations also carry
+  Redoc `x-badges: [{name: Enterprise}]`.
 - Scrubbed from public prose: internal ADR numbers (ADR-025 on `/metrics`,
   ADR-017 on `/v1/mcp/run/step`), internal tier names ("Standard+" →
   "Enterprise"), and the "Azure Container App FQDN" hosting hint in `servers`.
@@ -124,10 +135,11 @@ Also updated `/analytics` prose: it is now tenant-scoped by key ownership
 - A header comment in the yaml records the two invariants `community.html`
   relies on (one operation per path; the verbatim edition-marker line).
 
-### Deliberately NOT added (kept out of scope per the work order)
+### Deliberately NOT added in the original Bundle-A pass
 
-The gateway also serves `GET /v1/finops/{usage,timeseries,cache-savings}`,
-`GET /v1/residency/{summary,ledger}`, `GET /v1/guardrails/outcomes`,
+The FinOps and evaluation routes listed above are now documented. Remaining
+out-of-Bundle-A surfaces include `GET /v1/residency/{summary,ledger}`,
+`GET /v1/guardrails/outcomes`,
 `POST /v1/cache/purge`, and 10 further `/v1/mcp/*` routes (sampling, HITL,
 receipts, anomaly, security events). These are enterprise-side or
 out-of-Bundle-A surfaces; the instruction was to keep the existing

@@ -56,6 +56,9 @@ semantic capabilities until the ADR-105 held-out and production-shadow bars
 pass; entitlement alone does not arm answer serving.
 
 - `GET /v1/prompts/{ref}` (+ `/render`, `/completions`) — versioned prompt registry.
+- `GET /v1/finops/usage`, `/timeseries`, `/cache-savings`, `/saver-metrics` — recent process-local estimated FinOps reads (not durable, billed, or reconciled).
+- `GET /v1/finops/usage/daily` — durable daily estimated usage/cost envelope (not a provider invoice).
+- `GET /v1/evaluations`, `POST /v1/evaluations/score`, `GET /v1/evaluations/rubrics` — durable score history, deterministic non-persisted scoring, and rubric discovery.
 - `POST /v1/mcp/tool-result/inspect` — agentic security: inspect a tool result before it re-enters the model context.
 - `POST /v1/mcp/tool-call/authorize` — agentic security: default-deny tool-call authorization.
 - `POST /v1/mcp/run/step` — agentic security: account one agent-run iteration against its breakers.
@@ -64,7 +67,8 @@ pass; entitlement alone does not arm answer serving.
 
 - `x-routeplane-api-key` — virtual key (`rp_`-prefixed). See Authentication.
 - `x-routeplane-provider` — provider or comma-separated fallback chain (route-specific default). Overridden by sovereign routing when regulated data + a residency jurisdiction apply.
-- `x-routeplane-strategy` — candidate ordering: `priority` (default) | `weighted` | `cost` | `latency`.
+- `x-routeplane-strategy` — candidate ordering: `priority` (default) | `weighted` | `cost` | `latency` | `round_robin` | `least_busy` | `canary`.
+- `x-routeplane-canary-share-bps` — second-provider share for `canary`, in basis points; deterministic per virtual key, not per request.
 - `x-routeplane-residency` — requested data-residency jurisdiction (e.g. `IN`); enforced as a hard region lock only when the request also carries regulated personal data.
 - `x-routeplane-config` — routing/guardrails JSON envelope, or a saved-config reference `cfg_<id>` (Enterprise; named combos are the Community path to saved chains).
 - `x-routeplane-metadata` — JSON object of scalars addressable from routing conditions as `metadata.<key>`.

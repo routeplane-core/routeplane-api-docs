@@ -245,6 +245,14 @@ endpoint or a guarantee that the request remains in history.
 | `GET /status` | Fixed liveness in managed Enterprise; operational snapshot in CE | Community |
 | `GET /metrics` | Dedicated operator credential in managed Enterprise; unauthenticated in CE | Community |
 | `GET /healthz` | Liveness (no auth) | Community |
+| `GET /v1/finops/usage` | Recent process-local estimated chargeback/showback | Enterprise |
+| `GET /v1/finops/timeseries` | Recent process-local usage/cost buckets | Enterprise |
+| `GET /v1/finops/cache-savings` | Recent estimated cache savings | Enterprise |
+| `GET /v1/finops/saver-metrics` | Recent tenant saver telemetry + explicit omissions | Enterprise |
+| `GET /v1/finops/usage/daily` | Durable daily estimated usage/cost envelope | Enterprise |
+| `GET /v1/evaluations` | Durable judge-score history | Enterprise |
+| `POST /v1/evaluations/score` | Deterministic, non-persisted scoring | Enterprise |
+| `GET /v1/evaluations/rubrics` | Built-in judge-rubric discovery | Enterprise |
 | `GET /v1/prompts/{ref}` (+ `/render`, `/completions`) | Versioned prompt registry | Enterprise |
 | `POST /v1/mcp/tool-result/inspect` | Agentic security — inspect a tool result | Enterprise |
 | `POST /v1/mcp/tool-call/authorize` | Agentic security — default-deny tool-call authorization | Enterprise |
