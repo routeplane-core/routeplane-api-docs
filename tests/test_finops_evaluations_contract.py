@@ -42,8 +42,8 @@ class FinOpsEvaluationsContractTests(unittest.TestCase):
                 self.assertEqual(block.count("x-badges: [{name: Enterprise}]"), 1)
                 self.assertNotIn(f"  {path}:\n", CE)
 
-    def test_finops_success_responses_are_private_no_store(self):
-        for path in PATHS[:5]:
+    def test_sensitive_history_success_responses_are_private_no_store(self):
+        for path in (*PATHS[:5], "/v1/evaluations"):
             with self.subTest(path=path):
                 block = path_block(FULL, path)
                 success = block.split("        '200':", 1)[1].split(
@@ -78,6 +78,18 @@ class FinOpsEvaluationsContractTests(unittest.TestCase):
         self.assertIn("enum: [available, partial, unavailable]", schema)
         self.assertIn("enum: [known, legacy_unknown, corrupt]", schema)
         self.assertIn("enum: [estimated, unpriced, unavailable]", schema)
+        self.assertIn(
+            "required: [input_output_split_available, cost_split_coverage_state, input_attributed_count, output_attributed_count, invalid_input_count, invalid_output_count, missing_reasons, inr_view_available]",
+            schema,
+        )
+        for field in (
+            "cost_split_coverage_state",
+            "input_attributed_count",
+            "output_attributed_count",
+            "invalid_input_count",
+            "invalid_output_count",
+        ):
+            self.assertIn(f"{field}:", schema)
         self.assertIn("maximum: 9007199254740991", schema)
         self.assertGreaterEqual(schema.count("type: [integer, 'null']"), 5)
         self.assertIn(
