@@ -1108,6 +1108,9 @@ paths:
       responses:
         '200':
           description: Durable evaluation rows and a summary of those returned rows.
+          headers:
+            Cache-Control: { $ref: '#/components/headers/PrivateNoStore' }
+            Vary: { $ref: '#/components/headers/FinOpsVary' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EvaluationsPage' }
@@ -2695,10 +2698,10 @@ components:
 
   headers:
     PrivateNoStore:
-      description: Authenticated FinOps data is private and must not be stored by browsers or intermediaries.
+      description: Authenticated tenant data is private and must not be stored by browsers or intermediaries.
       schema: { type: string, const: 'private, no-store' }
     FinOpsVary:
-      description: FinOps responses vary by every supported authentication mechanism.
+      description: Sensitive tenant responses vary by every supported authentication mechanism.
       schema: { type: string, const: 'authorization, x-routeplane-api-key, cookie' }
     XProvider:
       schema: { type: string }
@@ -2955,9 +2958,19 @@ components:
     FinOpsPricingComponentCoverage:
       type: object
       additionalProperties: false
-      required: [input_output_split_available, inr_view_available]
+      required: [input_output_split_available, cost_split_coverage_state, input_attributed_count, output_attributed_count, invalid_input_count, invalid_output_count, missing_reasons, inr_view_available]
       properties:
         input_output_split_available: { type: boolean }
+        cost_split_coverage_state:
+          type: string
+          enum: [known, legacy_unknown, corrupt]
+        input_attributed_count: { type: integer, minimum: 0 }
+        output_attributed_count: { type: integer, minimum: 0 }
+        invalid_input_count: { type: integer, minimum: 0 }
+        invalid_output_count: { type: integer, minimum: 0 }
+        missing_reasons:
+          type: array
+          items: { type: string }
         inr_view_available: { type: boolean }
     FinOpsPricingEvidence:
       type: object
